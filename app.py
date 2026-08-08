@@ -313,8 +313,15 @@ def render_main():
 
     if df.empty:
         st.error(
-            "Nenhum dado retornado. Isso é comum com yfinance para forex intradiário — "
-            "tente aumentar o período, mudar para timeframe '1d', ou trocar a fonte de dados."
+            "Nenhum dado retornado. "
+            + ("A AwesomeAPI está sem limite/rate-limit (provavelmente falou a "
+               "`AWESOMEAPI_API_KEY` no deploy — sem ela o acesso é limitado por IP, "
+               "e o IP do data center é mais restrito). Defina a chave na aba "
+               "Environment do Render e redeploy. "
+               if source == "awesomeapi"
+               else "Isso é comum com yfinance para forex intradiário — "
+                    "tente aumentar o período, mudar para timeframe '1d', "
+                    "ou trocar a fonte de dados.")
         )
         st.stop()
 
