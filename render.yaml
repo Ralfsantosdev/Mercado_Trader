@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: mercado-trader
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: APP_PASSWORD
+        sync: false
+      - key: AWESOMEAPI_API_KEY
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT
+        sync: false

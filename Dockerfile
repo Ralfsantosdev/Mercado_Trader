@@ -13,9 +13,10 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
-# Secrets vêm das variáveis de ambiente do Railway (entrypoint gera o toml).
+# Secrets vêm das variáveis de ambiente do deploy (entrypoint gera o toml).
 RUN chmod +x entrypoint.sh
 
+# Render injeta a porta via $PORT; o entrypoint.sh usa ${PORT:-8080}.
 EXPOSE 8080
 
 CMD ["sh", "entrypoint.sh"]

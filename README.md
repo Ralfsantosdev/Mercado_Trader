@@ -54,17 +54,18 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
-### ☁️ Deploy no Railway
+### ☁️ Deploy no Render (gratuito)
 
-O `Dockerfile` + `entrypoint.sh` + `railway.json` já estão no repo (repo **privado** é
-suportado). O dashboard roda em container Linux **sem MetaTrader** — os dados em
-tempo real vêm da AwesomeAPI e a execução manual usa o modo demo; a ponte MT5
-fica desligada no container (elegantemente ignorada).
+O `Dockerfile` + `entrypoint.sh` + `render.yaml` já estão no repo (repo **privado** é
+suportado no Render). O dashboard roda em container Linux **sem MetaTrader** — os
+dados em tempo real vêm da AwesomeAPI e a execução manual usa o modo demo; a
+ponte MT5 fica desligada no container (é lazy e cai em try/except silenciosamente).
 
-1. No [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub
-   repo** → selecione `Mercado_Trader`.
-2. O Railway detecta o `Dockerfile` e os `railway.json`. Porta usada: `8080`.
-3. Vá em **Variables** e defina (as que deixar vazias ficam desligadas):
+1. No [render.com](https://render.com) → **New +** → **Web Service** → conecte o
+   GitHub → selecione `Mercado_Trader`.
+2. O Render detecta o `Dockerfile` (runtime `docker`). O `render.yaml` já define
+   o plano `free`, healthcheck em `/` e as variáveis.
+3. Vá em **Environment** → **Environment Variables** e defina (vazias = desligadas):
    ```bash
    APP_PASSWORD="sua_senha_forte"      # OBRIGATÓRIO se quiser autenticação no app
    AWESOMEAPI_API_KEY="sua_chave"      # opcional; sem ela usa cache de 1 min
@@ -72,8 +73,13 @@ fica desligada no container (elegantemente ignorada).
    TELEGRAM_CHAT="123456789"           # opcional — alertas
    ```
    O `entrypoint.sh` gera `.streamlit/secrets.toml` a partir dessas variáveis no
-   boot. **Nunca** define `secrets.toml` real dentro do repo.
-4. Sobe sozinho; o healthcheck gira em `/` e o Railway reinicia em falha.
+   boot. **Nunca** coloque `secrets.toml` real dentro do repo.
+4. Sobe sozinho na porta `$PORT` (Render injeta). Healthcheck em `/` e reinício
+   em falha automático.
+
+> ⚠️ Plano **free** do Render pausa o serviço após ~15 min sem acesso (acorda no
+> próximo clique, levando ~1 min para subir). Se quiser sempre-ativo, use o plano
+> Starter (~US$7/mês) ou um VPS.
 
 > ⚠️ O robô MT5 (`run_trader.sh`) e a execução real continuam rodando **só na sua
 > máquina Windows** — o cloud é somente o painel de análise + sinais por regras.
