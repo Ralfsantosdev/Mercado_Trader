@@ -71,9 +71,10 @@ def check_password() -> bool:
     return True
 
 
-# AUTENTICAÇÃO DESATIVADA — app roda localmente sem pedir senha.
-# Para reativar, descomente a linha abaixo:
-# check_password()
+# AUTENTICAÇÃO ATIVADA — o app exige senha antes de abrir o dashboard.
+# Senha vem de `.streamlit/secrets.toml` → app_password (definida via APP_PASSWORD
+# no deploy Render, ou no secrets.toml local).
+check_password()
 
 # ---------------------------------------------------------------------------
 # Sidebar — configurações
