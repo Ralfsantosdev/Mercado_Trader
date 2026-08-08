@@ -1,0 +1,42 @@
+# --- Segredos (NUNCA subir) ---
+.streamlit/secrets.toml
+secrets.toml
+*.env
+.env.*
+!.env.example
+
+# --- Chaves e credenciais ---
+*.key
+*.pem
+*.p12
+id_rsa
+id_ed25519
+credentials.json
+token.json
+service-account*.json
+
+# --- Estado de runtime / dados locais ---
+execution_state.json
+alert_state.json
+journal_state.json
+*.log
+*.log.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.eggs/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
