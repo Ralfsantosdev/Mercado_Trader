@@ -98,8 +98,14 @@ def main():
     ap.add_argument("--pullback-ema", type=int, default=50)
     args = ap.parse_args()
 
+    import os
     import streamlit as st
-    api_key = st.secrets.get("awesomeapi_key", "")
+    api_key = os.environ.get("AWESOMEAPI_API_KEY", "")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("awesomeapi_key", "")
+        except Exception:
+            api_key = ""
     df = get_provider(source="awesomeapi", api_key=api_key or None).get_ohlcv(
         args.symbol, days=args.days, interval=args.interval
     )

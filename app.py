@@ -17,6 +17,7 @@ Correções nesta versão:
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import os as _os
 
 from data_provider import get_provider
 from indicators import add_all_indicators
@@ -32,6 +33,21 @@ from executor import PaperBroker
 from dashboard_ui import inject_css, header
 
 st.set_page_config(page_title="Forex Dashboard", page_icon="📈", layout="wide")
+
+
+def get_secret(name: str, default: str = "") -> str:
+    """Lê um secret de env var primeiro, depois do secrets.toml do Streamlit.
+
+    Imune a falha de o entrypoint não ter gerado o arquivo (ex.: deploy):
+    no Render as env vars são sempre injetadas e este helper resolve delas.
+    """
+    val = _os.environ.get(name, "")
+    if val:
+        return val
+    try:
+        return st.secrets.get(name, default) or default
+    except Exception:
+        return default
 
 # Estilo visual (terminal de trading) — deve vir logo após set_page_config
 inject_css()
@@ -56,15 +72,15 @@ def _fmt_price(value: float) -> str:
 # a chamada `check_password()` abaixo da definição. A senha fica em secrets.
 # ---------------------------------------------------------------------------
 def check_password() -> bool:
-    if "app_password" not in st.secrets:
+    if not get_secret("app_password"):
         st.warning(
-            "⚠️ Nenhuma senha configurada em `.streamlit/secrets.toml`. "
+            "⚠️ Nenhuma senha configurada em `.streamlit/secrets.toml` ou `APP_PASSWORD`. "
             "Rodando sem autenticação — configure antes de expor este app publicamente."
         )
         return True
 
     pwd = st.sidebar.text_input("Senha", type="password")
-    if pwd != st.secrets["app_password"]:
+    if pwd != get_secret("app_password"):
         if pwd:
             st.sidebar.error("Senha incorreta.")
         st.stop()
@@ -246,7 +262,7 @@ st.sidebar.caption(
 @st.cache_data(ttl=30, show_spinner=False)
 def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, trigger_mode, pullback_ema,
                      use_volume, session, min_adx):
-    api_key = st.secrets.get("awesomeapi_key", "") if source == "awesomeapi" else None
+    api_key = get_secret("awesomeapi_key") if source == "awesomeapi" else None
     provider = get_provider(source=source, api_key=api_key)
     df = provider.get_ohlcv(symbol, days=days, interval=interval)
     if df.empty:
@@ -348,7 +364,7 @@ def render_main():
     if source == "awesomeapi":
         try:
             from dashboard_ui import quote_card
-            api_key = st.secrets.get("awesomeapi_key", "")
+            api_key = get_secret("awesomeapi_key")
             live = get_provider(source="awesomeapi", api_key=api_key).get_last_quote(symbol)
             bid = float(live.get("bid", 0))
             ask = float(live.get("ask", bid))
