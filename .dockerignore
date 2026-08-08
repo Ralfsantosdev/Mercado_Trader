@@ -1,0 +1,12 @@
+.git
+__pycache__/
+*.pyc
+*.log
+.execution_state.json
+alert_state.json
+journal_state.json
+.streamlit/secrets.toml
+secrets.toml
+.env
+Dockerfile
+.dockerignore

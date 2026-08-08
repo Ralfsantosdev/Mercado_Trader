@@ -54,6 +54,30 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
+### ☁️ Deploy no Railway
+
+O `Dockerfile` + `entrypoint.sh` + `railway.json` já estão no repo (repo **privado** é
+suportado). O dashboard roda em container Linux **sem MetaTrader** — os dados em
+tempo real vêm da AwesomeAPI e a execução manual usa o modo demo; a ponte MT5
+fica desligada no container (elegantemente ignorada).
+
+1. No [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub
+   repo** → selecione `Mercado_Trader`.
+2. O Railway detecta o `Dockerfile` e os `railway.json`. Porta usada: `8080`.
+3. Vá em **Variables** e defina (as que deixar vazias ficam desligadas):
+   ```bash
+   APP_PASSWORD="sua_senha_forte"      # OBRIGATÓRIO se quiser autenticação no app
+   AWESOMEAPI_API_KEY="sua_chave"      # opcional; sem ela usa cache de 1 min
+   TELEGRAM_TOKEN="123:ABC"            # opcional — alertas
+   TELEGRAM_CHAT="123456789"           # opcional — alertas
+   ```
+   O `entrypoint.sh` gera `.streamlit/secrets.toml` a partir dessas variáveis no
+   boot. **Nunca** define `secrets.toml` real dentro do repo.
+4. Sobe sozinho; o healthcheck gira em `/` e o Railway reinicia em falha.
+
+> ⚠️ O robô MT5 (`run_trader.sh`) e a execução real continuam rodando **só na sua
+> máquina Windows** — o cloud é somente o painel de análise + sinais por regras.
+
 Na sidebar você pode alternar entre **awesomeapi** (padrão, tempo real) e
 **yfinance** (Yahoo Finance, cache de 1h).
 
