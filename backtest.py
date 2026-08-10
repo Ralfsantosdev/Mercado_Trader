@@ -63,13 +63,7 @@ def run_backtest(
 
         # --- gerencia posição aberta (entrada aconteceu no candle anterior) ---
         if open_trade is not None:
-            entry_ts, entry_price, direction, size = open_trade
-            sl_price = entry_price - direction * max(sl_atr * atr, min_sl_pips * pip_size)
-            if tp_pips > 0:
-                tp_dist = tp_pips * pip_size
-            else:
-                tp_dist = max(tp_atr * atr, min_sl_pips * pip_size)
-            tp_price = entry_price + direction * tp_dist
+            entry_ts, entry_price, direction, size, sl_price, tp_price = open_trade
             high, low = float(row["High"]), float(row["Low"])
 
             if trailing_stop_pips > 0:
@@ -77,6 +71,9 @@ def run_backtest(
                     sl_price = max(sl_price, high - trailing_stop_pips * pip_size)
                 else:
                     sl_price = min(sl_price, low + trailing_stop_pips * pip_size)
+                
+                # Atualiza a tupla com o novo sl_price
+                open_trade = (entry_ts, entry_price, direction, size, sl_price, tp_price)
 
             exit_price, exit_reason = None, None
             if direction == 1:
@@ -115,13 +112,25 @@ def run_backtest(
 
         # --- abre nova posição no close deste candle ---
         if open_trade is None and signal != 0:
-            sl_distance = max(sl_atr * atr, min_sl_pips * pip_size)
+            custom_sl = row.get("Suggested_SL")
+            custom_tp = row.get("Suggested_TP")
+            
+            if pd.notna(custom_sl) and custom_sl > 0:
+                sl_distance = abs(float(row["Close"]) - float(custom_sl))
+                sl_price = float(custom_sl)
+            else:
+                sl_distance = max(sl_atr * atr, min_sl_pips * pip_size)
+                sl_price = float(row["Close"]) - signal * sl_distance
+
+            if pd.notna(custom_tp) and custom_tp > 0:
+                tp_price = float(custom_tp)
+            else:
+                tp_dist = tp_pips * pip_size if tp_pips > 0 else max(tp_atr * atr, min_sl_pips * pip_size)
+                tp_price = float(row["Close"]) + signal * tp_dist
             
             # Ajuste de risco dinâmico baseado na confiança da IA (se ativado)
             applied_risk_pct = risk_per_trade_pct
             if dynamic_risk_margin > 0:
-                # margin vai de 0 a 0.5. Escalamos de 0.5x até 2x o risco base
-                # Exemplo: margin alta = mais confiança = lotes maiores
                 risk_multiplier = 0.5 + (dynamic_risk_margin / 0.5) * 1.5 
                 applied_risk_pct = risk_per_trade_pct * min(max(risk_multiplier, 0.5), 2.0)
             
@@ -129,18 +138,18 @@ def run_backtest(
                 size = (cash * applied_risk_pct / 100.0) / sl_distance
             else:
                 size = 0.0
-            open_trade = (ts, float(row["Close"]), signal, size)
+            open_trade = (ts, float(row["Close"]), signal, size, sl_price, tp_price)
 
         # --- equity marcada a mercado a cada candle (p/ drawdown correto) ---
         equity = cash
         if open_trade is not None:
-            entry_ts, entry_price, direction, size = open_trade
+            entry_ts, entry_price, direction, size, sl_price, tp_price = open_trade
             equity += (float(row["Close"]) - entry_price) * direction * size
         equity_curve.append((ts, equity))
 
     # fecha o que sobrar ao final do período
     if open_trade is not None:
-        entry_ts, entry_price, direction, size = open_trade
+        entry_ts, entry_price, direction, size, sl_price, tp_price = open_trade
         pnl = (float(data["Close"].iloc[-1]) - entry_price) * direction * size - spread_pips * pip_size * size
         cash += pnl
         trades.append({

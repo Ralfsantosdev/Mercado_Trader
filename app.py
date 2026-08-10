@@ -142,11 +142,11 @@ use_cross = st.sidebar.checkbox("Gatilho por cruzamento MM9×MM21", value=True,
                                 help="Desmarque para usar nível (MM9 acima/abaixo da MM21) em vez de cruzamento.")
 trigger_mode = st.sidebar.selectbox(
     "Gatilho do sinal",
-    ["auto", "slope", "cross", "pullback", "3_9_20"],
+    ["auto", "slope", "cross", "pullback", "3_9_20", "fimathe_tokio"],
     index=4,
-    help="auto = comportamento antigo (cruzamento/inclinação). pullback = espera o preço "
-         "voltar à EMA no viés da tendência e só entra quando confirma virar. "
-         "3_9_20 = Cruzamento de 3 com 9 e 20 inclinada (100 pips recomendados)."
+    help="auto = comportamento antigo. pullback = espera o preço voltar à EMA. "
+         "3_9_20 = Cruz. de 3 com 9 e 20 inclinada. "
+         "fimathe_tokio = Técnica do Marcelão (Rompimento CR de 4 candles da abertura às 20:00)."
 )
 pullback_ema = st.sidebar.slider("EMA do pullback", 13, 100, 50, step=1,
                                  help="Só usado quando gatilho = pullback.")

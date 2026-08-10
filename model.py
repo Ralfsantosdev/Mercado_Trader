@@ -200,18 +200,61 @@ def generate_rule_based_signals(
         cross_up = (df["SMA_3"] > df["SMA_9"]) & (df["SMA_3"].shift(1) <= df["SMA_9"].shift(1))
         cross_down = (df["SMA_3"] < df["SMA_9"]) & (df["SMA_3"].shift(1) >= df["SMA_9"].shift(1))
         
-        # 20 inclinada na direção
         sma20_up = df["SMA_20"] > df["SMA_20"].shift(1)
         sma20_down = df["SMA_20"] < df["SMA_20"].shift(1)
         
-        # MM 9 e 20 abaixo/acima dos candles (Close vs MM)
-        # Compra: MMs sob os candles (Low > MM)
         mm_under_candles = (df["Low"] > df["SMA_9"]) & (df["Low"] > df["SMA_20"])
-        # Venda: MMs sobre os candles (High < MM)
         mm_over_candles = (df["High"] < df["SMA_9"]) & (df["High"] < df["SMA_20"])
         
         trigger_up = cross_up & sma20_up & mm_under_candles
         trigger_down = cross_down & sma20_down & mm_over_candles
+    elif trigger_mode == "fimathe_tokio":
+        # Filtro de tempo: das 20:00 às 20:15 (4 candles de 5 minutos)
+        # O dia de "trading" do forex costuma virar as 17:00 EST. 
+        # Identificamos a janela de formação do canal (CR)
+        is_formation = (df.index.hour == 20) & (df.index.minute < 20)
+        
+        # Cria colunas temporárias para carregar a Máxima e Mínima do canal de referência pro resto do dia
+        df["CR_High"] = np.nan
+        df["CR_Low"] = np.nan
+        
+        # Agrupa pelo dia (para garantir que só temos um canal por dia, a partir das 20:00)
+        # Como 20:00 já é noite, o "dia de trade" vai das 20:00 de um dia até 19:59 do outro.
+        # Vamos criar um "trade_day" que muda às 20:00
+        trade_day = (df.index.hour >= 20).astype(int).cumsum() - (df.index.hour >= 20).astype(int) + df.index.dayofyear
+        
+        for t_day, group in df.groupby(trade_day):
+            formation_idx = group[group.index.hour == 20][group.index.minute < 20].index
+            if len(formation_idx) > 0:
+                c_high = group.loc[formation_idx, "High"].max()
+                c_low = group.loc[formation_idx, "Low"].min()
+                # Preenche o resto do dia com esses valores
+                df.loc[group.index, "CR_High"] = c_high
+                df.loc[group.index, "CR_Low"] = c_low
+
+        # Calcula o tamanho do canal
+        channel_size = df["CR_High"] - df["CR_Low"]
+        
+        # Gatilho: fechamento do candle fora do canal de referência
+        # Adicionamos um shift(1) no High/Low para garantir que o candle ANTERIOR estava dentro ou fechou rompendo agora
+        trigger_up = (df["Close"] > df["CR_High"]) & (df["Close"].shift(1) <= df["CR_High"])
+        trigger_down = (df["Close"] < df["CR_Low"]) & (df["Close"].shift(1) >= df["CR_Low"])
+        
+        # Desliga as médias para essa estratégia, o price action é soberano
+        trend_up = pd.Series(True, index=df.index)
+        trend_down = pd.Series(True, index=df.index)
+        
+        # Calcula SL e TP Dinâmicos (2 níveis Fimathe)
+        # Compra: ZN fica abaixo do CR. SL é 2 canais pra baixo da entrada. TP é 2 canais pra cima.
+        df["Suggested_SL"] = np.nan
+        df["Suggested_TP"] = np.nan
+        
+        # Preenche os limites dinâmicos APENAS nos momentos de gatilho
+        df.loc[trigger_up, "Suggested_SL"] = df.loc[trigger_up, "Close"] - (2 * channel_size[trigger_up])
+        df.loc[trigger_up, "Suggested_TP"] = df.loc[trigger_up, "Close"] + (2 * channel_size[trigger_up])
+        
+        df.loc[trigger_down, "Suggested_SL"] = df.loc[trigger_down, "Close"] + (2 * channel_size[trigger_down])
+        df.loc[trigger_down, "Suggested_TP"] = df.loc[trigger_down, "Close"] - (2 * channel_size[trigger_down])
     else:
         raise ValueError(f"trigger_mode desconhecido: {trigger_mode!r}")
 
