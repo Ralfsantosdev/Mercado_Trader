@@ -36,8 +36,9 @@ MAX_LEVERAGE = 10.0       # teto de alavancagem (notional / equity)
 
 
 def mt5_symbol(symbol: str) -> str:
-    """Converte símbolo do app (EUR-USD) para o formato do MT5 (EURUSD)."""
-    return symbol.replace("-", "")
+    """Converte símbolo do app (EUR-USD, EURUSD=X) para o formato do MT5 (EURUSD)."""
+    s = symbol.replace("=X", "").upper()
+    return s.replace("-", "")
 
 
 def stop_distances(atr: float, sl_atr: float, tp_atr: float,

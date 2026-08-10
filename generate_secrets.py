@@ -27,10 +27,13 @@ def main() -> int:
     except ImportError:  # fallback mínimo (toml vem junto do streamlit)
         toml = None
 
-    app_password = _first("APP_PASSWORD", "ST_APP_PASSWORD")
+    # Aceita os dois padrões de nome: o MAIÚSCULO (recomendado) e o minúsculo
+    # (nome do secrets.toml). Muita gente cola no Render exatamente os nomes
+    # que viu no secrets.toml.example (app_password, telegram_token, ...).
+    app_password = _first("APP_PASSWORD", "ST_APP_PASSWORD", "app_password")
     aws_key = _first("AWESOMEAPI_API_KEY", "AWESOMEAPI_KEY", "awesomeapi_key")
-    tg_token = _first("TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN")
-    tg_chat = _first("TELEGRAM_CHAT")
+    tg_token = _first("TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN", "telegram_token")
+    tg_chat = _first("TELEGRAM_CHAT", "telegram_chat")
 
     secrets = {}
     if app_password:
@@ -53,16 +56,21 @@ def main() -> int:
             print("=== secrets.toml local já configurado pelo usuário — não vou sobrescrever.")
             return 0
 
-    if toml is not None:
-        with open(path, "w") as f:
+    # OBS: o marcador "# Gerado pelo entrypoint" TEM DE ESTAR no arquivo
+    # (não só em comentário de docstring): é ele que permite que um boot
+    # seguinte sobrescreva o toml quando novas env vars (ex.: Telegram) forem
+    # adicionadas no deploy. Antes ele só era gravado no fallback sem a lib
+    # `toml`, então o path normal gerava um arquivo "órfão" e o próximo boot
+    # se recusava a atualizar — credenciais novas nunca entravam.
+    with open(path, "w") as f:
+        f.write("# Gerado pelo entrypoint no boot do container.\n")
+        if toml is not None:
             toml.dump(secrets, f)
-    else:
-        # fallback sem lib — apenas valores simples, com aspas escapadas
-        def esc(v: str) -> str:
-            return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        else:
+            # fallback sem lib — apenas valores simples, com aspas escapadas
+            def esc(v: str) -> str:
+                return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-        with open(path, "w") as f:
-            f.write("# Gerado pelo entrypoint no boot do container.\n")
             for k, v in secrets.items():
                 f.write(f"{k} = {esc(v)}\n")
 

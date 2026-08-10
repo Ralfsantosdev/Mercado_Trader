@@ -198,6 +198,11 @@ def generate_rule_based_signals(
         touch_low = df["Low"] <= ema_line
         touch_high = df["High"] >= ema_line
         close_above = df["Close"] > ema_line
+        close_below = df["Close"] < ema_line
+        # pullback de alta: preço toca a EMA por baixo e fecha acima → retomada
+        trigger_up = touch_low & close_above
+        # pullback de baixa: preço toca a EMA por cima e fecha abaixo → retomada
+        trigger_down = touch_high & close_below
     elif trigger_mode == "3_9_20":
         # 3 cruza 9
         cross_up = (df["SMA_3"] > df["SMA_9"]) & (df["SMA_3"].shift(1) <= df["SMA_9"].shift(1))

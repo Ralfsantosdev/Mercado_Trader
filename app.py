@@ -101,7 +101,7 @@ st.sidebar.caption("Parâmetros do terminal")
 source = st.sidebar.selectbox(
     "Fonte de dados",
     ["awesomeapi", "yfinance"],
-    index=1,
+    index=0,
     help="awesomeapi: cotação e histórico em tempo real com a chave do "
          "https://awesomeapi.com.br (sem cache). yfinance: Yahoo Finance (cache de 1h).",
 )
@@ -301,7 +301,14 @@ def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, 
                      session, min_adx, max_spread_pips, min_tick_volume, fimathe_hour, fimathe_candles, fimathe_max_pips):
     api_key = get_secret("awesomeapi_key") if source == "awesomeapi" else None
     provider = get_provider(source=source, api_key=api_key)
-    df = provider.get_ohlcv(symbol, days=days, interval=interval)
+    try:
+        df = provider.get_ohlcv(symbol, days=days, interval=interval)
+    except Exception as e:
+        # erro de API/chave → deixa o app mostrar a mensagem, sem dado para trabalhar
+        import streamlit as st
+        st.session_state["_data_error"] = str(e)
+        return pd.DataFrame()
+    st.session_state["_data_error"] = ""
     if df.empty:
         return df
 
@@ -370,6 +377,10 @@ def render_main():
                               int(fimathe_hour), int(fimathe_candles), float(fimathe_max_pips))
 
     if df.empty:
+        _prev_err = st.session_state.get("_data_error", "")
+        if _prev_err:
+            st.error(f"❌ Falha ao buscar dados da AwesomeAPI: {_prev_err}")
+            st.stop()
         st.error(
             "Nenhum dado retornado. "
             + ("A AwesomeAPI está sem limite/rate-limit (provavelmente falou a "

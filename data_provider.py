@@ -9,6 +9,7 @@ uma linha no app.py — nada mais muda.
 """
 
 import json
+import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
@@ -119,10 +120,30 @@ class AwesomeAPIProvider(DataProvider):
     BASE_URL = "https://economia.awesomeapi.com.br"
     MAX_POINTS = 1500  # limite de pontos por chamada com API key
 
+    # Chaves que parecem placeholder/exemplo — falham com 403 "Invalid token".
+    _PLACEHOLDER_MARKERS = ("sua_chave", "your_key", "sk_exemplo", "suachave")
+
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key
+        self.api_key = (api_key or "").strip()
+        self._check_key()
 
     # ------------------------------------------------------------- helpers
+    def _check_key(self) -> None:
+        """Falha cedo com mensagem clara se a chave for placeholder/vazio."""
+        k = self.api_key.lower()
+        if not self.api_key:
+            raise RuntimeError(
+                "AwesomeAPI sem api_key. Defina `awesomeapi_key` em "
+                ".streamlit/secrets.toml ou a env var AWESOMEAPI_API_KEY "
+                "(https://awesomeapi.com.br/account#keys)."
+            )
+        if any(m in k for m in self._PLACEHOLDER_MARKERS):
+            raise RuntimeError(
+                f"A chave AwesomeAPI parece ser um placeholder ('{self.api_key}'). "
+                "Crie uma chave real em https://awesomeapi.com.br/account#keys e "
+                "coloque em .streamlit/secrets.toml → awesomeapi_key."
+            )
+
     @staticmethod
     def _normalize(symbol: str) -> str:
         """'EURUSD=X' → 'EUR-USD' (formato do AwesomeAPI)."""
@@ -137,12 +158,20 @@ class AwesomeAPIProvider(DataProvider):
         url = f"{self.BASE_URL}/{path}"
         headers = {"x-api-key": self.api_key} if self.api_key else {}
         last_err = None
+        body = None
         for attempt in range(retries):
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return json.loads(resp.read().decode())
-            except Exception as e:  # timeout / 5xx / rede — tenta de novo
+            except urllib.error.HTTPError as e:
+                # The body carries the real reason (Invalid token / Quota exceeded)
+                try:
+                    body = e.read().decode()[:300]
+                except Exception:
+                    body = None
+                last_err = f"HTTP {e.code}: {body if body else e.reason}"
+            except Exception as e:  # timeout / rede — tenta de novo
                 last_err = e
         raise RuntimeError(f"Falha ao consultar AwesomeAPI ({url}): {last_err}")
 
@@ -246,7 +275,10 @@ class AwesomeAPIProvider(DataProvider):
             try:
                 data = self._get_json(path)
             except Exception:
-                # janela falhou (timeout/parcial) — interrompe com o que já temos
+                # primeira janela = sem dados nenhum → erro real, não vazio silencioso
+                if not points:
+                    raise
+                # janela seguinte falhou (janela de mercado/limite) — interrompe com o que já temos
                 break
             if not isinstance(data, list) or not data:
                 break
@@ -267,8 +299,8 @@ class AwesomeAPIProvider(DataProvider):
         return list(uniq.values())
 
 
-def get_provider(source: str = "yfinance", csv_path: Optional[str] = None, api_key: Optional[str] = None) -> DataProvider:
-    """Fábrica simples — troque a fonte padrão aqui quando migrar."""
+def get_provider(source: str = "awesomeapi", csv_path: Optional[str] = None, api_key: Optional[str] = None) -> DataProvider:
+    """Fábrica — fonte padrão é a AwesomeAPI (tempo real). troque aqui se migrar."""
     if source == "awesomeapi":
         return AwesomeAPIProvider(api_key=api_key)
     elif source == "yfinance":

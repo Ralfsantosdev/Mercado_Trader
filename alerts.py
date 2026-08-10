@@ -31,9 +31,14 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alert_sta
 
 
 def get_credentials() -> tuple:
-    """Lê token/chat do secrets.toml do Streamlit ou de variáveis de ambiente."""
-    token = os.environ.get("TELEGRAM_TOKEN", "")
-    chat = os.environ.get("TELEGRAM_CHAT", "")
+    """Lê token/chat do secrets.toml do Streamlit ou de variáveis de ambiente.
+
+    Aceita os dois padrões de nome de env var: MAIÚSCULO (TELEGRAM_TOKEN) e o
+    minúsculo (telegram_token) — o pessoal costuma colar no deploy os nomes
+    exatos do secrets.toml.
+    """
+    token = os.environ.get("TELEGRAM_TOKEN", "") or os.environ.get("telegram_token", "")
+    chat = os.environ.get("TELEGRAM_CHAT", "") or os.environ.get("telegram_chat", "")
     try:
         import streamlit as st
         token = st.secrets.get("telegram_token", token) or token
@@ -155,16 +160,25 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
     if execute and not configured():
         return "❌ Telegram não configurado (falta telegram_token/telegram_chat) — não vou operar sem notificação."
 
-    api_key = ""
+    api_key = os.environ.get("AWESOMEAPI_API_KEY", "") or os.environ.get("AWESOMEAPI_KEY", "")
     try:
         import streamlit as st
-        api_key = st.secrets.get("awesomeapi_key", "")
+        api_key = api_key or (st.secrets.get("awesomeapi_key", "") or "")
     except Exception:
         pass
+    api_key = api_key.strip()
 
-    df = get_provider(source="awesomeapi", api_key=api_key or None).get_ohlcv(
-        symbol, days=days, interval=interval
-    )
+    # pip_size correto por ativo (XAU/JPY = 0.01, majors = 0.0001) — quem chama
+    # via CLI nem sempre sabe/preenche; o alerta/robô não pode usar o padrão errado.
+    if pip_size <= 0:
+        pip_size = 0.01 if any(k in symbol.upper() for k in ("XAU", "JPY")) else 0.0001
+
+    try:
+        df = get_provider(source="awesomeapi", api_key=api_key or None).get_ohlcv(
+            symbol, days=days, interval=interval
+        )
+    except Exception as e:
+        return f"❌ Erro na AwesomeAPI {symbol} {interval}: {e}"
     if df.empty:
         return f"⚠️ Sem dados para {symbol} {interval}."
 
