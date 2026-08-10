@@ -102,9 +102,20 @@ def monte_carlo(
         tp_level = price - tp_dist - s_half
         sl_level = price + sl_dist - s_half
 
-    # acha o primeiro candle em que o caminho cruza uma barreira
-    hit_tp = paths >= tp_level
-    hit_sl = paths <= sl_level
+    # acha o primeiro candle em que o caminho cruza uma barreira.
+    # OBS: a direção do cruzamento depende do lado da operação:
+    #   LONG → TP está ACIMA (preço sobe até ele) e SL ABAIXO (preço desce até ele).
+    #   SHORT → TP está ABAIXO (preço desce até ele) e SL ACIMA (preço sobe até ele).
+    # Antes o teste era fixo (`>=` no TP, `<=` no SL), o que invertia o SHORT:
+    # o preço de entrada já "tocava" as duas barreiras no candle 0, tudo ia para
+    # o ramo `flat` e o R saía absurdo (ex.: -12R para um short em tendência de
+    # alta). Com o SPREAD somado aos níveis, os cruzamentos agora são reais.
+    if direction == 1:
+        hit_tp = paths >= tp_level
+        hit_sl = paths <= sl_level
+    else:
+        hit_tp = paths <= tp_level
+        hit_sl = paths >= sl_level
 
     r_results = np.empty(n_paths)
     outcomes = np.empty(n_paths, dtype=int)  # 1=TP, -1=SL, 0=horizonte
