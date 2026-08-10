@@ -282,7 +282,9 @@ if st.sidebar.button("📤 Enviar alerta de teste"):
 if not alerts_mod.configured():
     st.sidebar.caption("⚠️ Sem credenciais do Telegram. Veja README.")
 
-auto_refresh = st.sidebar.checkbox("Atualizar automaticamente (15s)", value=True)
+_refresh_opts = {"30s": 30, "1min": 60, "2min": 120, "5min": 300}
+refresh_label = st.sidebar.selectbox("Atualizar automaticamente", list(_refresh_opts.keys()), index=0)
+auto_refresh = st.sidebar.checkbox(f"Ativado (a cada {refresh_label})", value=True)
 
 if st.sidebar.button("🔄 Atualizar dados agora"):
     st.cache_data.clear()
@@ -1077,5 +1079,5 @@ def render_main():
 
 
 if auto_refresh:
-    render_main = st.fragment(run_every="15s")(render_main)
+    render_main = st.fragment(run_every=f"{_refresh_opts[refresh_label]}s")(render_main)
 render_main()
