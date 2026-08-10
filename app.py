@@ -299,13 +299,13 @@ st.sidebar.caption(
 @st.cache_data(ttl=60, show_spinner=False)
 def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, trigger_mode, pullback_ema,
                      session, min_adx, max_spread_pips, min_tick_volume, fimathe_hour, fimathe_candles, fimathe_max_pips):
+    import streamlit as st
     api_key = get_secret("awesomeapi_key") if source == "awesomeapi" else None
     provider = get_provider(source=source, api_key=api_key)
     try:
         df = provider.get_ohlcv(symbol, days=days, interval=interval)
     except Exception as e:
         # erro de API/chave → deixa o app mostrar a mensagem, sem dado para trabalhar
-        import streamlit as st
         st.session_state["_data_error"] = str(e)
         return pd.DataFrame()
     st.session_state["_data_error"] = ""
