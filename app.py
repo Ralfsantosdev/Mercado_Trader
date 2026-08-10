@@ -146,10 +146,19 @@ trigger_mode = st.sidebar.selectbox(
     index=4,
     help="auto = comportamento antigo. pullback = espera o preço voltar à EMA. "
          "3_9_20 = Cruz. de 3 com 9 e 20 inclinada. "
-         "fimathe_tokio = Técnica do Marcelão (Rompimento CR de 4 candles da abertura às 20:00)."
+         "fimathe_tokio = Técnica Fimathe (Rompimento CR na Abertura)."
 )
 pullback_ema = st.sidebar.slider("EMA do pullback", 13, 100, 50, step=1,
                                  help="Só usado quando gatilho = pullback.")
+
+st.sidebar.subheader("⛩️ Configurações Fimathe")
+fimathe_hour = st.sidebar.number_input("Hora de abertura (0-23)", 0, 23, 20, 
+                                       help="Hora em que o mercado 'abre' para traçar o canal (ex: 20 para Tóquio, 8 para Londres).")
+fimathe_candles = st.sidebar.number_input("Duração (número de candles)", 1, 20, 4,
+                                          help="Quantos candles definem o Canal de Referência (CR). Ex: 4 candles no 5m = 20 minutos.")
+fimathe_max_pips = st.sidebar.number_input("Max Tamanho (pips)", 10, 2000, 30,
+                                           help="Se o CR ultrapassar isso, ele será cortado ao meio (fatiado) para diminuir o SL.")
+
 use_volume = st.sidebar.checkbox("Confirmar com volume", value=True,
                                  help="Se o volume não existir na fonte (Yahoo forex), a confirmação usa ATR em alta.")
 
@@ -284,9 +293,9 @@ st.sidebar.caption(
 # ---------------------------------------------------------------------------
 # Pipeline de dados (cacheado) e ML (cacheado) — definidos fora do fragment
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, trigger_mode, pullback_ema,
-                     use_volume, session, min_adx):
+                     session, min_adx, max_spread_pips, min_tick_volume, fimathe_hour, fimathe_candles, fimathe_max_pips):
     api_key = get_secret("awesomeapi_key") if source == "awesomeapi" else None
     provider = get_provider(source=source, api_key=api_key)
     df = provider.get_ohlcv(symbol, days=days, interval=interval)
@@ -306,6 +315,10 @@ def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, 
         pullback_ema=pullback_ema,
         session=session,
         min_adx=float(min_adx),
+        pip_size=_pip_size,
+        fimathe_hour=fimathe_hour,
+        fimathe_candles=fimathe_candles,
+        fimathe_max_pips=fimathe_max_pips,
     )
     return df
 
@@ -350,7 +363,8 @@ def _mt5_live_quote(symbol):
 def render_main():
     with st.spinner("Buscando dados..."):
         df = load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, trigger_mode, pullback_ema,
-                              use_volume, session, min_adx)
+                              session, min_adx, float(spread_pips * 2), 5,
+                              int(fimathe_hour), int(fimathe_candles), float(fimathe_max_pips))
 
     if df.empty:
         st.error(

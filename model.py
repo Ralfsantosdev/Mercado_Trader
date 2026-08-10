@@ -123,18 +123,21 @@ def apply_live_confirmation(df: pd.DataFrame, quote: Optional[dict] = None,
 
 def generate_rule_based_signals(
     df: pd.DataFrame,
-    rsi_overbought: float = 70,
-    rsi_oversold: float = 30,
+    rsi_overbought: int = 70,
+    rsi_oversold: int = 30,
     use_volume: bool = True,
     use_cross: bool = True,
-    trigger_mode: str = "slope",
+    trigger_mode: str = "auto",
     pullback_ema: int = 50,
     session: str = "",
-    min_adx: float = 0.0,
-    live=None,
-    max_spread_pips: float = 0.0,
-    min_tick_volume: float = 0.0,
-    pip_size: Optional[float] = None,
+    min_adx: int = 20,
+    live: dict = None,
+    max_spread_pips: float = 3.0,
+    min_tick_volume: int = 5,
+    pip_size: float = 0.0001,
+    fimathe_hour: int = 20,
+    fimathe_candles: int = 4,
+    fimathe_max_pips: float = 30.0,
 ) -> pd.DataFrame:
     """
     Estratégia:
@@ -209,31 +212,34 @@ def generate_rule_based_signals(
         trigger_up = cross_up & sma20_up & mm_under_candles
         trigger_down = cross_down & sma20_down & mm_over_candles
     elif trigger_mode == "fimathe_tokio":
-        # Filtro de tempo: das 20:00 às 20:15 (4 candles de 5 minutos)
-        # O dia de "trading" do forex costuma virar as 17:00 EST. 
-        # Identificamos a janela de formação do canal (CR)
-        is_formation = (df.index.hour == 20) & (df.index.minute < 20)
-        
-        # Cria colunas temporárias para carregar a Máxima e Mínima do canal de referência pro resto do dia
         df["CR_High"] = np.nan
         df["CR_Low"] = np.nan
         
-        # Agrupa pelo dia (para garantir que só temos um canal por dia, a partir das 20:00)
-        # Como 20:00 já é noite, o "dia de trade" vai das 20:00 de um dia até 19:59 do outro.
-        # Vamos criar um "trade_day" que muda às 20:00
-        trade_day = (df.index.hour >= 20).astype(int).cumsum() - (df.index.hour >= 20).astype(int) + df.index.dayofyear
+        # Desloca o índice para agrupar o "dia" começando na fimathe_hour
+        # Ex: se fimathe_hour=20, 20:00 de hj até 19:59 de amanhã vira o mesmo 'trade_day'
+        shifted_idx = df.index - pd.Timedelta(hours=fimathe_hour)
+        trade_day = shifted_idx.date
         
         for t_day, group in df.groupby(trade_day):
-            formation_idx = group[(group.index.hour == 20) & (group.index.minute < 20)].index
+            # Pega os primeiros `fimathe_candles` do grupo
+            formation_idx = group.head(fimathe_candles).index
             if len(formation_idx) > 0:
                 c_high = group.loc[formation_idx, "High"].max()
                 c_low = group.loc[formation_idx, "Low"].min()
-                # Preenche o resto do dia com esses valores
                 df.loc[group.index, "CR_High"] = c_high
                 df.loc[group.index, "CR_Low"] = c_low
 
-        # Calcula o tamanho do canal
+        # Calcula o tamanho original do canal
         channel_size = df["CR_High"] - df["CR_Low"]
+        
+        # Fatiamento: Se o canal for maior que max_pips, corta o tamanho dele pela metade
+        max_size = fimathe_max_pips * pip_size
+        oversized = channel_size > max_size
+        if oversized.any():
+            # Quando dividimos o canal de referência que ficou muito grande (fatiamento),
+            # o tamanho do risco (distância do canal) cai pela metade, mas os preços de 
+            # rompimento (CR_High e CR_Low) se mantém os mesmos.
+            channel_size.loc[oversized] = channel_size.loc[oversized] / 2.0
         
         # Gatilho: fechamento do candle fora do canal de referência
         # Adicionamos um shift(1) no High/Low para garantir que o candle ANTERIOR estava dentro ou fechou rompendo agora
