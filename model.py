@@ -224,7 +224,7 @@ def generate_rule_based_signals(
         trade_day = (df.index.hour >= 20).astype(int).cumsum() - (df.index.hour >= 20).astype(int) + df.index.dayofyear
         
         for t_day, group in df.groupby(trade_day):
-            formation_idx = group[group.index.hour == 20][group.index.minute < 20].index
+            formation_idx = group[(group.index.hour == 20) & (group.index.minute < 20)].index
             if len(formation_idx) > 0:
                 c_high = group.loc[formation_idx, "High"].max()
                 c_low = group.loc[formation_idx, "Low"].min()
