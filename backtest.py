@@ -35,6 +35,7 @@ def run_backtest(
     tp_pips: float = 0.0,
     trailing_stop_pips: float = 0.0,
     dynamic_risk_margin: float = 0.0,
+    swap_pips_per_day: float = 0.5,
 ):
     data = df.copy().dropna(subset=["ATR", "Signal"])
     if len(data) < 2:
@@ -52,6 +53,13 @@ def run_backtest(
         signal = int(row["Signal"])
         spread_cost = spread_pips * pip_size
         last_bar = i == len(data) - 1
+        
+        # Detecta rolagem de dia para cobrar swap
+        if i > 0 and ts.date() != data.index[i-1].date() and open_trade is not None:
+            # Subtrai o swap do caixa a cada virada de dia
+            swap_cost = swap_pips_per_day * pip_size * open_trade[3] # open_trade[3] é o size
+            cash -= swap_cost
+            # Adiciona ao custo acumulado do trade (opcional, aqui abatemos direto do cash para o equity)
 
         # --- gerencia posição aberta (entrada aconteceu no candle anterior) ---
         if open_trade is not None:

@@ -162,7 +162,8 @@ class PaperBroker(Broker):
     # ------------------------------------------------------- lógica do app
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
                   sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0,
-                  trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0) -> str:
+                  trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0,
+                  max_open_positions: int = 1) -> str:
         """
         Recebe o sinal do dashboard + preço/ATR atuais e executa no modo demo.
         Retorna uma mensagem descrevendo o que foi feito.
@@ -172,6 +173,10 @@ class PaperBroker(Broker):
 
         # sem posição: abre se houver sinal
         if pos is None and signal != 0:
+            current_open = len(self.state.get("positions", {}))
+            if current_open >= max_open_positions:
+                return f"⚠️ Limite de portfólio atingido ({current_open}/{max_open_positions} posições). Sinal ignorado."
+                
             if atr and atr > 0:
                 sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, tp_pips=tp_pips, pip_size=PIP_SIZE)
                 sl_dist = max(sl_dist, MIN_SL_PIPS * PIP_SIZE)
@@ -339,7 +344,8 @@ class Mt5Broker(Broker):
     # ------------------------------------------------------- lógica do app
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
                   sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0,
-                  trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0) -> str:
+                  trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0,
+                  max_open_positions: int = 1) -> str:
         m = self._mt5()
         sym = mt5_symbol(symbol)
         self.risk_pct = risk_pct
@@ -362,6 +368,10 @@ class Mt5Broker(Broker):
 
         # sem posição: abre se houver sinal
         if not pos and signal != 0:
+            current_open = len(m.positions())
+            if current_open >= max_open_positions:
+                return f"⚠️ Limite de portfólio atingido ({current_open}/{max_open_positions} posições). Sinal ignorado."
+
             if atr and atr > 0:
                 _ps = max(q.get("point", 0.0), 1e-6)
                 _pip_size = 0.01 if "JPY" in sym or "XAU" in sym else 0.0001

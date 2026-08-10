@@ -191,6 +191,9 @@ if ts_enabled:
 else:
     trailing_stop_pips = 0.0
 
+swap_pips_per_day = st.sidebar.number_input("Custo Swap/Overnight (pips/dia)", min_value=0.0, max_value=50.0, value=0.5, step=0.1,
+                                            help="Custo deduzido por dia se a posição for mantida overnight.")
+
 risk_pct = st.sidebar.number_input("Risco por trade (%)", min_value=0.1, max_value=10.0, value=0.25, step=0.25,
                                    help="Dimensionamento: o SL custa exatamente esse % da equity. "
                                         "0,25% é conservador; 1% em forex com spread já é agressivo.")
@@ -230,6 +233,8 @@ broker_type = st.sidebar.selectbox(
 slippage_pips = st.sidebar.number_input("Slippage simulado (pips)", min_value=0.0, max_value=20.0,
                                         value=1.0, step=0.5,
                                         help="Degradação realista de execução por ordem (só paper).")
+max_open_positions = st.sidebar.number_input("Max posições simultâneas (Portfólio)", min_value=1, max_value=20, value=1, step=1,
+                                             help="Gestão de portfólio: bloqueia novos sinais se o limite de posições estiver atingido, reduzindo exposição cruzada.")
 exec_capital = st.sidebar.number_input("Capital inicial (demo)", min_value=100.0, max_value=1_000_000.0,
                                        value=10000.0, step=500.0)
 if st.sidebar.button("🗑️ Zerar conta"):
@@ -441,8 +446,8 @@ def render_main():
     # ======================================================================
     # ABAS — separa os blocos para leitura rápida
     # ======================================================================
-    tab_ov, tab_bt, tab_ia, tab_j, tab_ex = st.tabs(
-        ["📊 Visão geral", "🔍 Backtest", "🤖 Análise IA", "🗓️ Consistência", "💸 Execução"]
+    tab_ov, tab_bt, tab_ia, tab_wfo, tab_j, tab_ex = st.tabs(
+        ["📊 Visão geral", "🔍 Backtest", "🤖 Análise IA", "🧬 Otimizador WFO", "🗓️ Consistência", "💸 Execução"]
     )
 
     # ==============================================================
@@ -549,6 +554,7 @@ def render_main():
                 tp_pips=float(tp_pips),
                 trailing_stop_pips=float(trailing_stop_pips),
                 dynamic_risk_margin=float(dyn_margin),
+                swap_pips_per_day=float(swap_pips_per_day),
                 risk_per_trade_pct=float(risk_pct),
                 pip_size=_pip_size,
             )
@@ -710,6 +716,50 @@ def render_main():
                         }
                         st.dataframe(pd.DataFrame(list(_detail.items()), columns=["Métrica", "Valor"]),
                                      hide_index=True)
+
+    # ==============================================================
+    # ABA: OTIMIZADOR WFO (Walk-Forward Optimization)
+    # ==============================================================
+    with tab_wfo:
+        st.subheader("🧬 Otimização Walk-Forward Contínua (WFO)")
+        st.caption(
+            "Em vez de fixar parâmetros para sempre, sistemas institucionais otimizam os tamanhos das médias "
+            "e níveis do RSI constantemente em janelas de treinamento, avaliando em janelas de teste (fora-da-amostra). "
+            "Isso adapta a estratégia às mudanças de regime de mercado sem incorrer em *curve fitting* (overfitting)."
+        )
+        
+        wfo_top = st.number_input("Quantos resultados mostrar?", min_value=1, max_value=20, value=5)
+        
+        if st.button("🚀 Rodar Otimização Agora (Pode levar de 1 a 3 minutos)", type="primary"):
+            with st.spinner("Testando centenas de combinações em treino e avaliando no teste..."):
+                import optimize
+                # Utiliza o dataframe bruto já baixado
+                ranked = optimize.run_optimization_workflow(df, float(spread_pips), _pip_size, trigger_mode=trigger_mode)
+                if not ranked:
+                    st.warning("Não houveram dados/trades suficientes para avaliar com robustez.")
+                else:
+                    st.success("Otimização concluída! Resultados que sobreviveram à janela Fora-da-Amostra (Teste):")
+                    
+                    show_data = []
+                    for params, tm, em in ranked[:int(wfo_top)]:
+                        cross = "X" if params["use_cross"] else "Nível"
+                        sess = "Sim" if params["session"] else "Não"
+                        show_data.append({
+                            "RSI OB/OS": f"{params['rsi_overbought']}/{params['rsi_oversold']}",
+                            "Filtro ADX": params['min_adx'],
+                            "Stop Loss (xATR)": params['sl_atr'],
+                            "Take Profit (xATR)": params['tp_atr'],
+                            "WinRate Treino": f"{tm['hit']}%",
+                            "Trades Treino": tm['n'],
+                            "Expectativa Teste (R)": f"{em['exp']:+.3f}" if em else "—",
+                            "Trades Teste": em['n'] if em else 0,
+                        })
+                    st.dataframe(pd.DataFrame(show_data), hide_index=True)
+                    
+                    st.info(
+                        "**Como ler:** Escolha sempre as configurações que tiveram um bom número de trades no Treino "
+                        "mas que mantiveram a 'Expectativa Teste' positiva. Atualize o painel lateral com esses parâmetros."
+                    )
 
     # ==============================================================
     # ABA: CONSISTÊNCIA — diário da qualidade de execução
@@ -876,7 +926,8 @@ def render_main():
             msg = broker.on_signal(
                 symbol, last_signal, last_close, last_atr,
                 sl_atr=float(sl_atr), tp_atr=float(tp_atr), risk_pct=float(risk_pct), tp_pips=float(tp_pips),
-                trailing_stop_pips=float(trailing_stop_pips), dynamic_risk_margin=float(dyn_margin)
+                trailing_stop_pips=float(trailing_stop_pips), dynamic_risk_margin=float(dyn_margin),
+                max_open_positions=int(max_open_positions)
             )
             if msg:
                 st.info(msg)

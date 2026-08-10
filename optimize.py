@@ -16,7 +16,6 @@ Uso:
 
 import argparse
 import warnings
-
 import pandas as pd
 
 warnings.filterwarnings("ignore")
@@ -29,7 +28,6 @@ from backtest import run_backtest
 TRAIN_SPLIT = 0.60
 MIN_TRAIN_TRADES = 15
 MIN_TEST_TRADES = 3
-
 
 def grid(trigger_mode="auto"):
     combos = []
@@ -84,6 +82,38 @@ def seg_metrics(trades):
     }
 
 
+def run_optimization_workflow(df, spread_pips, pip_size, trigger_mode="auto"):
+    """
+    Exported function to run WFO optimization and return the ranked list of params.
+    """
+    df = df.dropna(subset=["ATR"]).copy()
+    if len(df) < 50:
+        return None
+
+    idx = df.index
+    split_ts = idx[int(len(df) * TRAIN_SPLIT)]
+
+    combos = grid(trigger_mode)
+    results = []
+    for params in combos:
+        r = eval_combo(df, params, spread_pips, pip_size, split_ts)
+        if r is None:
+            continue
+        train, test = r
+        tm = seg_metrics(train)
+        em = seg_metrics(test)
+        if tm is None or tm["n"] < MIN_TRAIN_TRADES:
+            continue
+        results.append((params, tm, em))
+
+    if not results:
+        return None
+
+    # ranking pelo desempenho FORA-DA-AMOSTRA (teste)
+    ranked = sorted(results, key=lambda x: (x[2] or {}).get("exp", -99), reverse=True)
+    return ranked
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="XAU-USD")
@@ -93,8 +123,8 @@ def main():
     ap.add_argument("--pip", type=float, default=0.0001, help="valor de 1 pip do ativo")
     ap.add_argument("--top", type=int, default=5)
     ap.add_argument("--trigger-mode", default="auto",
-                    choices=["auto", "slope", "cross", "pullback"],
-                    help="Gatilho a otimizar (padrão: auto = comportamento antigo)")
+                    choices=["auto", "slope", "cross", "pullback", "3_9_20"],
+                    help="Gatilho a otimizar")
     ap.add_argument("--pullback-ema", type=int, default=50)
     args = ap.parse_args()
 
@@ -106,41 +136,21 @@ def main():
             api_key = st.secrets.get("awesomeapi_key", "")
         except Exception:
             api_key = ""
+    
     df = get_provider(source="awesomeapi", api_key=api_key or None).get_ohlcv(
         args.symbol, days=args.days, interval=args.interval
     )
+    
     if df.empty:
         print(f"❌ Sem dados para {args.symbol} {args.interval}")
         return
+        
     df = add_all_indicators(df)
-    df = df.dropna(subset=["ATR"]).copy()
-
-    idx = df.index
-    split_ts = idx[int(len(df) * TRAIN_SPLIT)]
-    print(f"=== {args.symbol} {args.interval} | {len(df)} candles | "
-          f"treino {idx[0]} → {split_ts} | teste {split_ts} → {idx[-1]}")
-    print(f"    spread {args.spread} pip @ {args.pip} | grade: {len(grid(args.trigger_mode))} combos\n")
-
-    combos = grid(args.trigger_mode)
-    results = []
-    for params in combos:
-        params["pullback_ema"] = args.pullback_ema
-        r = eval_combo(df, params, args.spread, args.pip, split_ts)
-        if r is None:
-            continue
-        train, test = r
-        tm = seg_metrics(train)
-        em = seg_metrics(test)
-        if tm is None or tm["n"] < MIN_TRAIN_TRADES:
-            continue
-        results.append((params, tm, em))
-
-    if not results:
-        print("Nenhum combo gerou trades suficientes no treino.")
+    
+    ranked = run_optimization_workflow(df, args.spread, args.pip, args.trigger_mode)
+    if not ranked:
+        print("Nenhuma configuração gerou trades suficientes no treino.")
         return
-
-    # ranking pelo desempenho FORA-DA-AMOSTRA (teste)
-    ranked = sorted(results, key=lambda x: (x[2] or {}).get("exp", -99), reverse=True)
 
     print(f"Top {args.top} por expectativa no TESTE (fora-da-amostra):\n")
     print(f"{'RSI':<8}{'cross':<6}{'sessão':<4}{'ADX':<4}{'SLx':<5}{'TPx':<5}"
@@ -169,7 +179,6 @@ def main():
     else:
         print("Nenhuma configuração sobreviveu fora-da-amostra com expectativa positiva.")
         print("Com esses parâmetros e esse spread, o sistema provavelmente perde para os custos.")
-
 
 if __name__ == "__main__":
     main()
