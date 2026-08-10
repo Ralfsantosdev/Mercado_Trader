@@ -163,10 +163,16 @@ class PaperBroker(Broker):
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
                   sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0,
                   trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0,
-                  max_open_positions: int = 1) -> str:
+                  max_open_positions: int = 1,
+                  suggested_sl: float = 0.0, suggested_tp: float = 0.0,
+                  pip_size: float = PIP_SIZE) -> str:
         """
         Recebe o sinal do dashboard + preço/ATR atuais e executa no modo demo.
         Retorna uma mensagem descrevendo o que foi feito.
+
+        `suggested_sl`/`suggested_tp`: stops explícitos vindos da estratégia
+        (ex.: Fimathe — SL/TP por tamanho de canal). Quando > 0, são usados
+        exatamente como o backtest faz; senão cai no SL/TP por ATR.
         """
         pos = self.state["positions"].get(symbol)
         self._mark(symbol, price)
@@ -178,20 +184,29 @@ class PaperBroker(Broker):
                 return f"⚠️ Limite de portfólio atingido ({current_open}/{max_open_positions} posições). Sinal ignorado."
                 
             if atr and atr > 0:
-                sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, tp_pips=tp_pips, pip_size=PIP_SIZE)
-                sl_dist = max(sl_dist, MIN_SL_PIPS * PIP_SIZE)
-                tp_dist = max(tp_dist, MIN_SL_PIPS * PIP_SIZE)
-                # Risco dinâmico
+                # Risco dinâmico (comum aos dois caminhos de stop)
                 applied_risk_pct = risk_pct
                 if dynamic_risk_margin > 0:
                     risk_multiplier = 0.5 + (dynamic_risk_margin / 0.5) * 1.5
                     applied_risk_pct = risk_pct * min(max(risk_multiplier, 0.5), 2.0)
 
+                if suggested_sl > 0 and suggested_tp > 0:
+                    # stops explícitos da estratégia (Fimathe) — iguais ao backtest
+                    entry = price
+                    sl = float(suggested_sl)
+                    tp = float(suggested_tp)
+                    sl_dist = max(abs(entry - sl), MIN_SL_PIPS * max(pip_size, 1e-6))
+                else:
+                    sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, tp_pips=tp_pips, pip_size=pip_size)
+                    sl_dist = max(sl_dist, MIN_SL_PIPS * max(pip_size, 1e-6))
+                    tp_dist = max(tp_dist, MIN_SL_PIPS * max(pip_size, 1e-6))
+
                 size = (self.state["capital"] * applied_risk_pct / 100.0) / sl_dist
                 size = clamp_size(size, price, self.state["capital"])
                 entry = price
-                sl = entry - signal * sl_dist
-                tp = entry + signal * tp_dist
+                if suggested_sl <= 0 or suggested_tp <= 0:
+                    sl = entry - signal * sl_dist
+                    tp = entry + signal * tp_dist
                 self.place_order(symbol, signal, entry, sl, tp, size)
                 return (f"🟢 ABRIU LONG em {symbol} @ {entry:.5f} (SL {sl:.5f}, TP {tp:.5f})"
                         if signal == 1 else
@@ -345,7 +360,9 @@ class Mt5Broker(Broker):
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
                   sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0,
                   trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0,
-                  max_open_positions: int = 1) -> str:
+                  max_open_positions: int = 1,
+                  suggested_sl: float = 0.0, suggested_tp: float = 0.0,
+                  pip_size: float = 0.0001) -> str:
         m = self._mt5()
         sym = mt5_symbol(symbol)
         self.risk_pct = risk_pct
@@ -373,18 +390,28 @@ class Mt5Broker(Broker):
                 return f"⚠️ Limite de portfólio atingido ({current_open}/{max_open_positions} posições). Sinal ignorado."
 
             if atr and atr > 0:
-                _ps = max(q.get("point", 0.0), 1e-6)
-                _pip_size = 0.01 if "JPY" in sym or "XAU" in sym else 0.0001
-                sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, spread, _ps, tp_pips=tp_pips, pip_size=_pip_size)
-                sl_dist = max(sl_dist, MIN_SL_PIPS * max(q.get("point", 0.0), 1e-6))
-                tp_dist = max(tp_dist, MIN_SL_PIPS * max(q.get("point", 0.0), 1e-6))
-                sl = live - signal * sl_dist
-                tp = live + signal * tp_dist
-                # Risco dinâmico
+                # Risco dinâmico (comum aos dois caminhos de stop)
                 applied_risk_pct = risk_pct
                 if dynamic_risk_margin > 0:
                     risk_multiplier = 0.5 + (dynamic_risk_margin / 0.5) * 1.5
                     applied_risk_pct = risk_pct * min(max(risk_multiplier, 0.5), 2.0)
+
+                _ps = max(q.get("point", 0.0), 1e-6)
+                _pip_size = 0.01 if "JPY" in sym or "XAU" in sym else 0.0001
+                if pip_size > 0:
+                    _pip_size = pip_size
+
+                if suggested_sl > 0 and suggested_tp > 0:
+                    # stops explícitos da estratégia (Fimathe)
+                    sl = float(suggested_sl)
+                    tp = float(suggested_tp)
+                    sl_dist = max(abs(live - sl), MIN_SL_PIPS * _ps)
+                else:
+                    sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, spread, _ps, tp_pips=tp_pips, pip_size=_pip_size)
+                    sl_dist = max(sl_dist, MIN_SL_PIPS * _ps)
+                    tp_dist = max(tp_dist, MIN_SL_PIPS * _ps)
+                    sl = live - signal * sl_dist
+                    tp = live + signal * tp_dist
 
                 size = self._size_lots(equity, applied_risk_pct, sl_dist, price=live)
                 ok = self.place_order(symbol, signal, live, sl, tp, size)

@@ -137,7 +137,10 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
                  use_volume: bool = True, session: str = "Londres + Nova York (melhor janela)",
                  min_adx: float = 20.0, force: bool = False,
                  execute: bool = False, sl_atr: float = 1.5, tp_atr: float = 3.0,
-                 risk_pct: float = 0.25) -> str:
+                 risk_pct: float = 0.25,
+                 pip_size: float = 0.0001,
+                 fimathe_hour: int = 20, fimathe_candles: int = 4,
+                 fimathe_max_pips: float = 30.0) -> str:
     """
     Verifica o último candle e notifica o Telegram SE o sinal mudou.
     Com execute=True, também executa a ordem no MetaTrader 5 (abre/fecha
@@ -176,11 +179,23 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
         pullback_ema=pullback_ema,
         session=session,
         min_adx=float(min_adx),
+        pip_size=pip_size,
+        fimathe_hour=fimathe_hour,
+        fimathe_candles=fimathe_candles,
+        fimathe_max_pips=fimathe_max_pips,
     )
 
     last_signal = int(df["Signal"].iloc[-1])
     last_close = float(df["Close"].iloc[-1])
     last_atr = float(df["ATR"].iloc[-1]) if pd.notna(df["ATR"].iloc[-1]) else 0.0
+
+    # Stops explícitos da estratégia (ex.: Fimathe) para a execução no MT5
+    _sug_sl = 0.0
+    _sug_tp = 0.0
+    if "Suggested_SL" in df.columns and pd.notna(df["Suggested_SL"].iloc[-1]):
+        _sug_sl = float(df["Suggested_SL"].iloc[-1])
+    if "Suggested_TP" in df.columns and pd.notna(df["Suggested_TP"].iloc[-1]):
+        _sug_tp = float(df["Suggested_TP"].iloc[-1])
 
     # notifica o Telegram se o sinal mudou
     msg = notify_signal_change(symbol, last_signal, last_close, interval, force=force)
@@ -195,6 +210,7 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
                 exec_msg = broker.on_signal(
                     symbol, last_signal, last_close, last_atr,
                     sl_atr=sl_atr, tp_atr=tp_atr, risk_pct=risk_pct,
+                    suggested_sl=_sug_sl, suggested_tp=_sug_tp, pip_size=pip_size,
                 )
             else:
                 exec_msg = "❌ MT5 indisponível (terminal/bridge não rodando)."
@@ -224,7 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--rsi-os", type=float, default=30)
     parser.add_argument("--no-cross", action="store_true", help="Usa nível MM9/MM21 em vez de cruzamento")
     parser.add_argument("--trigger-mode", default="pullback",
-                        choices=["auto", "slope", "cross", "pullback"],
+                        choices=["auto", "slope", "cross", "pullback", "3_9_20", "fimathe_tokio"],
                         help="Gatilho do sinal. pullback (padrão) = retorno à EMA50 no viés da tendência.")
     parser.add_argument("--pullback-ema", type=int, default=50, help="EMA usada no gatilho pullback")
     parser.add_argument("--no-volume", action="store_true")
@@ -233,6 +249,11 @@ if __name__ == "__main__":
     parser.add_argument("--sl-atr", type=float, default=1.5)
     parser.add_argument("--tp-atr", type=float, default=3.0)
     parser.add_argument("--risk-pct", type=float, default=0.25)
+    parser.add_argument("--pip-size", type=float, default=0.0001,
+                        help="Valor de 1 pip do ativo (0.01 p/ XAU/JPY, 0.0001 p/ majors)")
+    parser.add_argument("--fimathe-hour", type=int, default=20, help="Abertura Fimathe (0-23 UTC)")
+    parser.add_argument("--fimathe-candles", type=int, default=4, help="Duração do Canal de Referência")
+    parser.add_argument("--fimathe-max-pips", type=float, default=30.0, help="Fatiamento do canal em pips")
     parser.add_argument("--force", action="store_true", help="Ignora o estado salvo e notifica sempre")
     args = parser.parse_args()
 
@@ -246,5 +267,7 @@ if __name__ == "__main__":
             trigger_mode=args.trigger_mode, pullback_ema=args.pullback_ema,
             session=args.session, min_adx=args.min_adx, force=args.force,
             execute=args.execute, sl_atr=args.sl_atr, tp_atr=args.tp_atr,
-            risk_pct=args.risk_pct,
+            risk_pct=args.risk_pct, pip_size=args.pip_size,
+            fimathe_hour=args.fimathe_hour, fimathe_candles=args.fimathe_candles,
+            fimathe_max_pips=args.fimathe_max_pips,
         ))

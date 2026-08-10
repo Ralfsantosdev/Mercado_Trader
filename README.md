@@ -87,6 +87,97 @@ ponte MT5 fica desligada no container (é lazy e cai em try/except silenciosamen
 Na sidebar você pode alternar entre **awesomeapi** (padrão, tempo real) e
 **yfinance** (Yahoo Finance, cache de 1h).
 
+## Mudanças importantes (v5) — estratégias avançadas e gestão de risco
+
+Versão focada em **novas técnicas de entrada**, **otimização** e **proteção de
+conta**. Tudo isso está no dashboard; nada aqui muda a filosofia honesta: só
+vale operar configuração que sobrevive ao backtest **com spread** e ao WFO.
+
+### ⛩️ Técnica Fimathe (abertura de Tóquio)
+
+Estratégia de **fatiamento de canal**, inspirada na Fimathe: o canal de
+referência (CR) é traçado nos primeiros `Duração` candles após a `Hora de
+abertura` (padrão 20h UTC = Tóquio), e a entrada ocorre no **rompimento** desse
+canal, sempre no viés do SMA 200 (tendência).
+
+- **SL/TP dinâmicos por tamanho de canal**: SL = 2 canais, TP = 2 canais a
+  partir da entrada. Se o CR ficar maior que `Max Tamanho (pips)`, ele é
+  **fatiado ao meio** para reduzir o risco (SL mais curto).
+- Configurações na sidebar → `⛩️ Configurações Fimathe` (`fimathe_hour`,
+  `fimathe_candles`, `fimathe_max_pips`).
+- Gatilho: `trigger_mode = "fimathe_tokio"`.
+- ⚠️ **Validação honesta**: quando o Fimathe está ativo, a **execução demo usa o
+  mesmo SL/TP do backtest** (`Suggested_SL`/`Suggested_TP`). O broker
+  (`PaperBroker`/`Mt5Broker`) recebe esses stops — antes da correção ele usava
+  SL/TP por ATR e a demo não reproduzia a estratégia.
+
+### 🥇 Estratégia de cruzamento MM3/MM9/MM20
+
+Gatilho `3_9_20`: **MM3 cruza a MM9** **com** inclinação da MM20 a favor e
+velas inteiras (candles) acima/abaixo de MM9+MM20 antes do cruzamento — filtro
+de continuidade de tendência.
+
+### 🎯 Stop Gain em Pips
+
+O take profit pode ser definido **em pips** (padrão 100p) em vez de múltiplos
+de ATR — modo `Take Profit → Pips` na sidebar. Correção: o `pip_size` correto
+do par agora é propagado para o broker (XAU usa 0.01, JPY 0.01, majors 0.0001),
+senão o TP em pips saía 100× errado para ouro.
+
+### 🛑 Trailing Stop
+
+Habilite `Ativar Trailing Stop` na sidebar: o SL acompanha o preço a N pips de
+distância (bloqueia a perda de um ganho já conquistado). Funciona no backtest,
+na execução demo e no robozinho do MT5.
+
+### 📈 Gestão de Risco Dinâmica (Kelly Fracionado via IA)
+
+`Gestão de Risco Dinâmica` na sidebar: quando ligada, o **% de risco por trade
+é ajustado pela margem de confiança do ML** — trades com sinal "mais claro"
+recebem mais lote (multiplicador entre 0.5× e 2.0× do risco base).
+
+### 🧬 Otimizador WFO (Walk-Forward Optimization)
+
+Aba **🧬 Otimizador WFO** no dashboard (e `optimize.py` standalone):
+
+- Divide o histórico em **60% treino + 40% teste** (fora-da-amostra).
+- Varre a grade de parâmetros (RSI, cruzamento, sessão, ADX, SL/TP ×ATR) no
+  treino e **só sobrevive** quem mantém expectativa positiva no teste que nunca
+  viu.
+- Quem brilha no treino e morre no teste = overfitting → descartado.
+
+```bash
+python3 optimize.py --symbol XAU-USD --interval 5m --spread 25 --pip 0.01 --top 5
+python3 optimize.py --symbol EUR-USD --interval 15m --spread 2 --pip 0.0001
+```
+
+### 🧺 Limite de posições (Portfólio)
+
+`Max posições simultâneas (Portfólio)` na sidebar (padrão 1): bloqueia novos
+sinais quando o limite de posições abertas é atingido — reduz exposição cruzada
+entre pares. Vale para paper e MT5.
+
+### 💰 Swap / overnight no backtest
+
+`Custo Swap/Overnight (pips/dia)` na sidebar: deduz o custo de virada de dia
+quando a posição é mantida overnight — essencial para estratégias de médio prazo.
+
+### 🛡️ Confirmação ao vivo (MT5)
+
+`Confirmar com spread/tick ao vivo` na sidebar: quando ativo e com o bridge MT5
+rodando, a entrada é **bloqueada** se o spread real (ask−bid) estiver acima do
+máximo configurado ou o volume de tick for baixo — evita comprar pico de
+notícia/custo. Requer `mt5server.exe` ativo; sem ele, o filtro fica desligado
+com aviso.
+
+### 🗓️ Diário de consistência
+
+Aba **🗓️ Consistência** — registra cada operação manual com a **zona da
+entrada** (liquidez/neutra/armadilha), se você **seguiu o plano** e a
+confirmação. Métricas em **R** (retorno/risco), acerto por zona e curva de
+execução. Persiste em `journal_state.json`. A métrica principal é a
+**% de trades que seguiram o plano**, independente de lucro.
+
 ## Novas funcionalidades (v3)
 
 ### 🌍 Filtro de condição de mercado (sessão + ADX)
@@ -201,14 +292,21 @@ mesma interface do `PaperBroker` (troca-se a instância no app).
 
 ```
 forex_dashboard/
-├── app.py              # Interface Streamlit (parâmetros, backtest, ML, demo, alertas)
+├── app.py              # Interface Streamlit (parâmetros, backtest, ML, WFO, demo, alertas)
 ├── data_provider.py    # Fonte de dados (AwesomeAPI tempo real / yfinance / CSV)
 ├── indicators.py       # RSI, MACD, médias, ATR, Bollinger, ADX (fórmulas próprias)
-├── model.py            # Sinais por regra + filtros de sessão/ADX + ML walk-forward
-├── backtest.py         # Backtest com spread, risco %, SL/TP, métricas
-├── executor.py         # Paper trading (Broker) com preço real + slippage
-├── alerts.py           # Alertas Telegram com estado persistente
+├── model.py            # Sinais por regra (incl. Fimathe, 3_9_20, pullback) + filtros + ML walk-forward
+├── backtest.py         # Backtest com spread, swap, risco %, SL/TP, trailing, métricas
+├── executor.py         # Paper trading + MT5 (Broker) com SL/TP sugerido, slippage, limites
+├── ai_analysis.py      # Monte Carlo, VaR, P(TP/SL), score de convicção (100% offline)
+├── optimize.py         # Otimização Walk-Forward (WFO) — CLI e aba no app
+├── alerts.py           # Alertas Telegram + execução MT5 standalone (cron)
+├── journal.py          # Diário de consistência (zonas, plano seguido, métricas em R)
+├── mt5_bridge.py       # Client RPyC mínimo para o MT5 sob Wine (porta 18812)
+├── dashboard_ui.py     # Estilo/UI do painel
 ├── test_pipeline.py    # Teste de sanidade com dados sintéticos
+├── run_trader.sh       # Robô: executa sinais no MT5 via cron
+├── run_alerts.sh       # Alerta de sinal no Telegram via cron
 └── requirements.txt
 ```
 
@@ -228,13 +326,16 @@ forex_dashboard/
 
 ## O que ainda NÃO existe (próxima etapa)
 
-- **Corretora real** — o app executa no papel (modo demo). A interface `Broker`
-  em `executor.py` já está pronta; falta plugar MetaTrader5/OANDA practice.
+- **Live nas features novas** — o Fimathe e a confirmação ao vivo já funcionam
+  no **demo e no MT5 demo**, mas a execução `LiveBroker` real (corretora
+  regulada, OANDA/etc.) ainda não existe: a interface `Broker` em `executor.py`
+  está pronta, falta plugar.
 - **Dados M5 confiáveis** — o Yahoo não entrega; a AwesomeAPI resolve em tempo
   real para os pares e timeframes que ela suporta. Para M5 com histórico mais
   longo que ~30 dias, use CSV do MetaTrader/Dukascopy (a camada `data_provider`
   já suporta).
-- **Walk-forward em múltiplos pares** — o ML já usa walk-forward, mas rode o
-  mesmo backtest em vários pares/períodos antes de confiar em qualquer edge.
+- **Walk-forward em múltiplos pares** — o ML e o WFO já usam walk-forward, mas
+  rode o mesmo backtest em vários pares/períodos antes de confiar em qualquer
+  edge.
 - **Slippage real, requotes e downtime** — o modo demo simula slippage, mas o
   resto depende da corretora real.

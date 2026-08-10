@@ -133,6 +133,9 @@ if source == "awesomeapi":
     _max_days = {"1m": 1, "5m": 30, "15m": 30, "30m": 30, "1h": 30, "1d": 360}[interval]
 else:
     _max_days = {"1m": 7, "5m": 60, "15m": 60, "30m": 45, "1h": 365, "1d": 365}[interval]
+
+# Streamlit slider requires min_value < max_value
+_max_days = max(2, _max_days)
 days = st.sidebar.slider("Período (dias de histórico)", 1, _max_days, min(30, _max_days))
 
 st.sidebar.subheader("🎯 Sinal por regras")
@@ -937,11 +940,21 @@ def render_main():
             last_close = float(df["Close"].iloc[-1])
             last_atr = float(df["ATR"].iloc[-1]) if pd.notna(df["ATR"].iloc[-1]) else 0.0
 
+            # Stops explícitos da estratégia (ex.: Fimathe — SL/TP por canal).
+            # O broker os usa exatamente como o backtest para validação honesta.
+            _sug_sl = 0.0
+            _sug_tp = 0.0
+            if "Suggested_SL" in df.columns and pd.notna(df["Suggested_SL"].iloc[-1]):
+                _sug_sl = float(df["Suggested_SL"].iloc[-1])
+            if "Suggested_TP" in df.columns and pd.notna(df["Suggested_TP"].iloc[-1]):
+                _sug_tp = float(df["Suggested_TP"].iloc[-1])
+
             msg = broker.on_signal(
                 symbol, last_signal, last_close, last_atr,
                 sl_atr=float(sl_atr), tp_atr=float(tp_atr), risk_pct=float(risk_pct), tp_pips=float(tp_pips),
                 trailing_stop_pips=float(trailing_stop_pips), dynamic_risk_margin=float(dyn_margin),
-                max_open_positions=int(max_open_positions)
+                max_open_positions=int(max_open_positions),
+                suggested_sl=_sug_sl, suggested_tp=_sug_tp, pip_size=_pip_size,
             )
             if msg:
                 st.info(msg)
