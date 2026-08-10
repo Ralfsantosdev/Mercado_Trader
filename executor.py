@@ -161,7 +161,8 @@ class PaperBroker(Broker):
 
     # ------------------------------------------------------- lógica do app
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
-                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0) -> str:
+                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0,
+                  trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0) -> str:
         """
         Recebe o sinal do dashboard + preço/ATR atuais e executa no modo demo.
         Retorna uma mensagem descrevendo o que foi feito.
@@ -175,7 +176,13 @@ class PaperBroker(Broker):
                 sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, tp_pips=tp_pips, pip_size=PIP_SIZE)
                 sl_dist = max(sl_dist, MIN_SL_PIPS * PIP_SIZE)
                 tp_dist = max(tp_dist, MIN_SL_PIPS * PIP_SIZE)
-                size = (self.state["capital"] * risk_pct / 100.0) / sl_dist
+                # Risco dinâmico
+                applied_risk_pct = risk_pct
+                if dynamic_risk_margin > 0:
+                    risk_multiplier = 0.5 + (dynamic_risk_margin / 0.5) * 1.5
+                    applied_risk_pct = risk_pct * min(max(risk_multiplier, 0.5), 2.0)
+
+                size = (self.state["capital"] * applied_risk_pct / 100.0) / sl_dist
                 size = clamp_size(size, price, self.state["capital"])
                 entry = price
                 sl = entry - signal * sl_dist
@@ -189,6 +196,14 @@ class PaperBroker(Broker):
         # com posição: verifica SL/TP ou sinal contrário
         if pos is not None:
             side = pos["side"]
+            
+            # Trailing stop manual na execução paper
+            if trailing_stop_pips > 0:
+                if side == 1:
+                    pos["sl"] = max(pos["sl"], price - trailing_stop_pips * PIP_SIZE)
+                else:
+                    pos["sl"] = min(pos["sl"], price + trailing_stop_pips * PIP_SIZE)
+            
             if side == 1:
                 hit_sl = price <= pos["sl"]
                 hit_tp = price >= pos["tp"]
@@ -323,7 +338,8 @@ class Mt5Broker(Broker):
 
     # ------------------------------------------------------- lógica do app
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
-                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0) -> str:
+                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0,
+                  trailing_stop_pips: float = 0.0, dynamic_risk_margin: float = 0.0) -> str:
         m = self._mt5()
         sym = mt5_symbol(symbol)
         self.risk_pct = risk_pct
@@ -354,7 +370,13 @@ class Mt5Broker(Broker):
                 tp_dist = max(tp_dist, MIN_SL_PIPS * max(q.get("point", 0.0), 1e-6))
                 sl = live - signal * sl_dist
                 tp = live + signal * tp_dist
-                size = self._size_lots(equity, risk_pct, sl_dist, price=live)
+                # Risco dinâmico
+                applied_risk_pct = risk_pct
+                if dynamic_risk_margin > 0:
+                    risk_multiplier = 0.5 + (dynamic_risk_margin / 0.5) * 1.5
+                    applied_risk_pct = risk_pct * min(max(risk_multiplier, 0.5), 2.0)
+
+                size = self._size_lots(equity, applied_risk_pct, sl_dist, price=live)
                 ok = self.place_order(symbol, signal, live, sl, tp, size)
                 if ok:
                     return (f"🟢 ABRIU LONG no MT5 {sym} @ {live:.5f} "

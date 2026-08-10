@@ -33,6 +33,8 @@ def run_backtest(
     pip_size: float = PIP_SIZE,
     min_sl_pips: float = 10.0,
     tp_pips: float = 0.0,
+    trailing_stop_pips: float = 0.0,
+    dynamic_risk_margin: float = 0.0,
 ):
     data = df.copy().dropna(subset=["ATR", "Signal"])
     if len(data) < 2:
@@ -61,6 +63,12 @@ def run_backtest(
                 tp_dist = max(tp_atr * atr, min_sl_pips * pip_size)
             tp_price = entry_price + direction * tp_dist
             high, low = float(row["High"]), float(row["Low"])
+
+            if trailing_stop_pips > 0:
+                if direction == 1:
+                    sl_price = max(sl_price, high - trailing_stop_pips * pip_size)
+                else:
+                    sl_price = min(sl_price, low + trailing_stop_pips * pip_size)
 
             exit_price, exit_reason = None, None
             if direction == 1:
@@ -100,8 +108,17 @@ def run_backtest(
         # --- abre nova posição no close deste candle ---
         if open_trade is None and signal != 0:
             sl_distance = max(sl_atr * atr, min_sl_pips * pip_size)
+            
+            # Ajuste de risco dinâmico baseado na confiança da IA (se ativado)
+            applied_risk_pct = risk_per_trade_pct
+            if dynamic_risk_margin > 0:
+                # margin vai de 0 a 0.5. Escalamos de 0.5x até 2x o risco base
+                # Exemplo: margin alta = mais confiança = lotes maiores
+                risk_multiplier = 0.5 + (dynamic_risk_margin / 0.5) * 1.5 
+                applied_risk_pct = risk_per_trade_pct * min(max(risk_multiplier, 0.5), 2.0)
+            
             if sl_distance > 0:
-                size = (cash * risk_per_trade_pct / 100.0) / sl_distance
+                size = (cash * applied_risk_pct / 100.0) / sl_distance
             else:
                 size = 0.0
             open_trade = (ts, float(row["Close"]), signal, size)

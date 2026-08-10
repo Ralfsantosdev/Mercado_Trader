@@ -185,6 +185,12 @@ else:
     tp_pips = 0.0
     tp_atr = st.sidebar.number_input("Take profit (×ATR)", min_value=0.5, max_value=10.0, value=3.0, step=0.5)
 
+ts_enabled = st.sidebar.checkbox("Ativar Trailing Stop", value=False)
+if ts_enabled:
+    trailing_stop_pips = st.sidebar.number_input("Distância do Trailing Stop (pips)", min_value=10.0, max_value=500.0, value=50.0, step=10.0)
+else:
+    trailing_stop_pips = 0.0
+
 risk_pct = st.sidebar.number_input("Risco por trade (%)", min_value=0.1, max_value=10.0, value=0.25, step=0.25,
                                    help="Dimensionamento: o SL custa exatamente esse % da equity. "
                                         "0,25% é conservador; 1% em forex com spread já é agressivo.")
@@ -195,6 +201,12 @@ ai_enabled = st.sidebar.checkbox(
     value=False,
     help="Estatística local (Monte Carlo, VaR, P(TP/SL)) — somente offline, "
          "sem chamadas de API e sem custo de tokens.",
+)
+use_dynamic_risk = st.sidebar.checkbox(
+    "Gestão de Risco Dinâmica (Kelly Fracionado via IA)",
+    value=False,
+    help="Ajusta o % de risco de cada trade com base na 'Margem de Confiança' do "
+         "modelo de Machine Learning. Oportunidades claras recebem mais lote."
 )
 ai_horizon = st.sidebar.slider("Horizonte da simulação (candles)", 5, 100, 30, step=5,
                                help="Quantos candles à frente o Monte Carlo simula.")
@@ -398,6 +410,13 @@ def render_main():
         )
 
     # ------------------------------------------------------------------ Métricas
+    # Puxa o margin da IA para a gestão de risco dinâmico, se habilitado
+    dyn_margin = 0.0
+    if use_dynamic_risk:
+        res_ml = train_cached(df)
+        if res_ml[0] is not None:
+            _, dyn_margin, _ = predict_latest(res_ml[0], df)
+
     col1, col2, col3, col4 = st.columns(4)
 
     last_close = df["Close"].iloc[-1]
@@ -528,6 +547,8 @@ def render_main():
                 sl_atr=float(sl_atr),
                 tp_atr=float(tp_atr),
                 tp_pips=float(tp_pips),
+                trailing_stop_pips=float(trailing_stop_pips),
+                dynamic_risk_margin=float(dyn_margin),
                 risk_per_trade_pct=float(risk_pct),
                 pip_size=_pip_size,
             )
@@ -855,6 +876,7 @@ def render_main():
             msg = broker.on_signal(
                 symbol, last_signal, last_close, last_atr,
                 sl_atr=float(sl_atr), tp_atr=float(tp_atr), risk_pct=float(risk_pct), tp_pips=float(tp_pips),
+                trailing_stop_pips=float(trailing_stop_pips), dynamic_risk_margin=float(dyn_margin)
             )
             if msg:
                 st.info(msg)
