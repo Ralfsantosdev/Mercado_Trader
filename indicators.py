@@ -96,7 +96,9 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Recebe OHLCV e devolve com todos os indicadores usados no dashboard."""
     df = df.copy()
 
+    df["SMA_3"] = sma(df["Close"], 3)
     df["SMA_9"] = sma(df["Close"], 9)
+    df["SMA_20"] = sma(df["Close"], 20)
     df["SMA_21"] = sma(df["Close"], 21)
     df["SMA_200"] = sma(df["Close"], 200)
 

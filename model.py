@@ -195,9 +195,23 @@ def generate_rule_based_signals(
         touch_low = df["Low"] <= ema_line
         touch_high = df["High"] >= ema_line
         close_above = df["Close"] > ema_line
-        close_below = df["Close"] < ema_line
-        trigger_up = touch_low & close_above
-        trigger_down = touch_high & close_below
+    elif trigger_mode == "3_9_20":
+        # 3 cruza 9
+        cross_up = (df["SMA_3"] > df["SMA_9"]) & (df["SMA_3"].shift(1) <= df["SMA_9"].shift(1))
+        cross_down = (df["SMA_3"] < df["SMA_9"]) & (df["SMA_3"].shift(1) >= df["SMA_9"].shift(1))
+        
+        # 20 inclinada na direção
+        sma20_up = df["SMA_20"] > df["SMA_20"].shift(1)
+        sma20_down = df["SMA_20"] < df["SMA_20"].shift(1)
+        
+        # MM 9 e 20 abaixo/acima dos candles (Close vs MM)
+        # Compra: MMs sob os candles (Low > MM)
+        mm_under_candles = (df["Low"] > df["SMA_9"]) & (df["Low"] > df["SMA_20"])
+        # Venda: MMs sobre os candles (High < MM)
+        mm_over_candles = (df["High"] < df["SMA_9"]) & (df["High"] < df["SMA_20"])
+        
+        trigger_up = cross_up & sma20_up & mm_under_candles
+        trigger_down = cross_down & sma20_down & mm_over_candles
     else:
         raise ValueError(f"trigger_mode desconhecido: {trigger_mode!r}")
 

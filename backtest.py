@@ -32,6 +32,7 @@ def run_backtest(
     initial_capital: float = 10000.0,
     pip_size: float = PIP_SIZE,
     min_sl_pips: float = 10.0,
+    tp_pips: float = 0.0,
 ):
     data = df.copy().dropna(subset=["ATR", "Signal"])
     if len(data) < 2:
@@ -54,7 +55,11 @@ def run_backtest(
         if open_trade is not None:
             entry_ts, entry_price, direction, size = open_trade
             sl_price = entry_price - direction * max(sl_atr * atr, min_sl_pips * pip_size)
-            tp_price = entry_price + direction * max(tp_atr * atr, min_sl_pips * pip_size)
+            if tp_pips > 0:
+                tp_dist = tp_pips * pip_size
+            else:
+                tp_dist = max(tp_atr * atr, min_sl_pips * pip_size)
+            tp_price = entry_price + direction * tp_dist
             high, low = float(row["High"]), float(row["Low"])
 
             exit_price, exit_reason = None, None

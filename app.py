@@ -101,7 +101,7 @@ st.sidebar.caption("Parâmetros do terminal")
 source = st.sidebar.selectbox(
     "Fonte de dados",
     ["awesomeapi", "yfinance"],
-    index=0,
+    index=1,
     help="awesomeapi: cotação e histórico em tempo real com a chave do "
          "https://awesomeapi.com.br (sem cache). yfinance: Yahoo Finance (cache de 1h).",
 )
@@ -142,11 +142,11 @@ use_cross = st.sidebar.checkbox("Gatilho por cruzamento MM9×MM21", value=True,
                                 help="Desmarque para usar nível (MM9 acima/abaixo da MM21) em vez de cruzamento.")
 trigger_mode = st.sidebar.selectbox(
     "Gatilho do sinal",
-    ["auto", "slope", "cross", "pullback"],
-    index=0,
+    ["auto", "slope", "cross", "pullback", "3_9_20"],
+    index=4,
     help="auto = comportamento antigo (cruzamento/inclinação). pullback = espera o preço "
-         "voltar à EMA no viés da tendência e só entra quando confirma virar (edge validado "
-         "fora da amostra em EUR/XAU/JPY 15m)."
+         "voltar à EMA no viés da tendência e só entra quando confirma virar. "
+         "3_9_20 = Cruzamento de 3 com 9 e 20 inclinada (100 pips recomendados)."
 )
 pullback_ema = st.sidebar.slider("EMA do pullback", 13, 100, 50, step=1,
                                  help="Só usado quando gatilho = pullback.")
@@ -176,7 +176,15 @@ spread_pips = st.sidebar.number_input("Spread (pips)", min_value=0.0, max_value=
                                       help=f"Custo por operação (ida+volta). {symbol}: 1 pip = {_pip_size}. "
                                            "Sem ele o backtest mente.")
 sl_atr = st.sidebar.number_input("Stop loss (×ATR)", min_value=0.5, max_value=10.0, value=2.0, step=0.5)
-tp_atr = st.sidebar.number_input("Take profit (×ATR)", min_value=0.5, max_value=10.0, value=3.0, step=0.5)
+
+tp_mode = st.sidebar.radio("Modo Take Profit", ["Pips", "ATR"], index=0, horizontal=True)
+if tp_mode == "Pips":
+    tp_pips = st.sidebar.number_input("Take profit (pips)", min_value=10.0, max_value=1000.0, value=100.0, step=10.0)
+    tp_atr = 0.0
+else:
+    tp_pips = 0.0
+    tp_atr = st.sidebar.number_input("Take profit (×ATR)", min_value=0.5, max_value=10.0, value=3.0, step=0.5)
+
 risk_pct = st.sidebar.number_input("Risco por trade (%)", min_value=0.1, max_value=10.0, value=0.25, step=0.25,
                                    help="Dimensionamento: o SL custa exatamente esse % da equity. "
                                         "0,25% é conservador; 1% em forex com spread já é agressivo.")
@@ -519,6 +527,7 @@ def render_main():
                 spread_pips=float(spread_pips),
                 sl_atr=float(sl_atr),
                 tp_atr=float(tp_atr),
+                tp_pips=float(tp_pips),
                 risk_per_trade_pct=float(risk_pct),
                 pip_size=_pip_size,
             )
@@ -845,7 +854,7 @@ def render_main():
 
             msg = broker.on_signal(
                 symbol, last_signal, last_close, last_atr,
-                sl_atr=float(sl_atr), tp_atr=float(tp_atr), risk_pct=float(risk_pct),
+                sl_atr=float(sl_atr), tp_atr=float(tp_atr), risk_pct=float(risk_pct), tp_pips=float(tp_pips),
             )
             if msg:
                 st.info(msg)

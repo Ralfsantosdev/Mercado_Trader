@@ -41,14 +41,17 @@ def mt5_symbol(symbol: str) -> str:
 
 
 def stop_distances(atr: float, sl_atr: float, tp_atr: float,
-                   spread: float = 0.0, point: float = 0.0) -> tuple:
+                   spread: float = 0.0, point: float = 0.0, tp_pips: float = 0.0, pip_size: float = 0.0001) -> tuple:
     """
     Distâncias efetivas de SL/TP em preço. Se o spread for maior que a
     distância por ATR, os stops caindo dentro do spread são rejeitados pela
     corretora ("Invalid stops"). Garante um piso = spread + 5 pontos.
     """
     atr_sl = max(atr, 0.0) * sl_atr
-    atr_tp = max(atr, 0.0) * tp_atr
+    if tp_pips > 0:
+        atr_tp = tp_pips * pip_size
+    else:
+        atr_tp = max(atr, 0.0) * tp_atr
     floor = max(spread + 5.0 * max(point, 1e-6), 0.0)
     return max(atr_sl, floor), max(atr_tp, floor)
 
@@ -158,7 +161,7 @@ class PaperBroker(Broker):
 
     # ------------------------------------------------------- lógica do app
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
-                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25) -> str:
+                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0) -> str:
         """
         Recebe o sinal do dashboard + preço/ATR atuais e executa no modo demo.
         Retorna uma mensagem descrevendo o que foi feito.
@@ -169,7 +172,7 @@ class PaperBroker(Broker):
         # sem posição: abre se houver sinal
         if pos is None and signal != 0:
             if atr and atr > 0:
-                sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr)
+                sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, tp_pips=tp_pips, pip_size=PIP_SIZE)
                 sl_dist = max(sl_dist, MIN_SL_PIPS * PIP_SIZE)
                 tp_dist = max(tp_dist, MIN_SL_PIPS * PIP_SIZE)
                 size = (self.state["capital"] * risk_pct / 100.0) / sl_dist
@@ -320,7 +323,7 @@ class Mt5Broker(Broker):
 
     # ------------------------------------------------------- lógica do app
     def on_signal(self, symbol: str, signal: int, price: float, atr: float,
-                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25) -> str:
+                  sl_atr: float = 2.0, tp_atr: float = 2.0, risk_pct: float = 0.25, tp_pips: float = 0.0) -> str:
         m = self._mt5()
         sym = mt5_symbol(symbol)
         self.risk_pct = risk_pct
@@ -344,7 +347,9 @@ class Mt5Broker(Broker):
         # sem posição: abre se houver sinal
         if not pos and signal != 0:
             if atr and atr > 0:
-                sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, spread, q.get("point", 0.0))
+                _ps = max(q.get("point", 0.0), 1e-6)
+                _pip_size = 0.01 if "JPY" in sym or "XAU" in sym else 0.0001
+                sl_dist, tp_dist = stop_distances(atr, sl_atr, tp_atr, spread, _ps, tp_pips=tp_pips, pip_size=_pip_size)
                 sl_dist = max(sl_dist, MIN_SL_PIPS * max(q.get("point", 0.0), 1e-6))
                 tp_dist = max(tp_dist, MIN_SL_PIPS * max(q.get("point", 0.0), 1e-6))
                 sl = live - signal * sl_dist
