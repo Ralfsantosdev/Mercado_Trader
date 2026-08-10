@@ -240,10 +240,6 @@ def generate_rule_based_signals(
         trigger_up = (df["Close"] > df["CR_High"]) & (df["Close"].shift(1) <= df["CR_High"])
         trigger_down = (df["Close"] < df["CR_Low"]) & (df["Close"].shift(1) >= df["CR_Low"])
         
-        # Desliga as médias para essa estratégia, o price action é soberano
-        trend_up = pd.Series(True, index=df.index)
-        trend_down = pd.Series(True, index=df.index)
-        
         # Calcula SL e TP Dinâmicos (2 níveis Fimathe)
         # Compra: ZN fica abaixo do CR. SL é 2 canais pra baixo da entrada. TP é 2 canais pra cima.
         df["Suggested_SL"] = np.nan
