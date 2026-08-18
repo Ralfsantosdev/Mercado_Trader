@@ -293,7 +293,7 @@ if os.path.exists(pid_file):
 
 if robot_running:
     st.sidebar.success("🟢 Robô está RODANDO (ver /tmp/trader_bg.log)")
-    if st.sidebar.button("⏹️ Parar Robô", width="stretch"):
+    if st.sidebar.button("⏹️ Parar Robô", use_container_width=True):
         try:
             with open(pid_file, "r") as f:
                 robot_pid = int(f.read().strip())
@@ -304,7 +304,7 @@ if robot_running:
             st.sidebar.error(f"Erro: {e}")
 else:
     st.sidebar.info("⚪ Robô está PARADO")
-    if st.sidebar.button("▶️ Ligar Robô", type="primary", width="stretch"):
+    if st.sidebar.button("▶️ Ligar Robô", type="primary", use_container_width=True):
         cmd = [
             "python3", "alerts.py", "--check", "--execute",
             "--symbol", symbol, "--interval", interval, "--days", str(days),
@@ -654,7 +654,7 @@ def render_main():
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         fig.update_xaxes(rangeslider_thickness=0.08)
-        st.plotly_chart(fig, width="stretch", config=_PLOTLY_CONFIG)
+        st.plotly_chart(fig, use_container_width=True, config=_PLOTLY_CONFIG)
 
         # RSI detalhado
         with st.expander("RSI (14) detalhado"):
@@ -663,7 +663,7 @@ def render_main():
             fig_rsi.add_hline(y=rsi_ob, line_dash="dash", line_color="#dc2626", annotation_text=f"limite compra {rsi_ob}")
             fig_rsi.add_hline(y=rsi_os, line_dash="dash", line_color="#059669", annotation_text=f"limite venda {rsi_os}")
             fig_rsi.update_layout(height=250, template="plotly_white")
-            st.plotly_chart(fig_rsi, width="stretch", config=_PLOTLY_CONFIG)
+            st.plotly_chart(fig_rsi, use_container_width=True, config=_PLOTLY_CONFIG)
 
     # ==============================================================
     # ABA: BACKTEST
@@ -705,7 +705,7 @@ def render_main():
                 fig_eq = go.Figure()
                 fig_eq.add_trace(go.Scatter(x=equity.index, y=equity.values, name="Equity", line=dict(color="#059669")))
                 fig_eq.update_layout(height=300, template="plotly_white", title="Curva de equity (marcada a mercado)")
-                st.plotly_chart(fig_eq, width="stretch", config=_PLOTLY_CONFIG)
+                st.plotly_chart(fig_eq, use_container_width=True, config=_PLOTLY_CONFIG)
 
             if not trades_df.empty:
                 with st.expander(f"Tabela de operações ({len(trades_df)})"):
@@ -814,7 +814,7 @@ def render_main():
                             title=f"Monte Carlo — distribuição do retorno (R) em {mc['n_paths']} caminhos",
                             xaxis_title="R (1R = perda do SL)", yaxis_title="caminhos", bargap=0.05,
                         )
-                        st.plotly_chart(fig_mc, width="stretch", config=_PLOTLY_CONFIG)
+                        st.plotly_chart(fig_mc, use_container_width=True, config=_PLOTLY_CONFIG)
 
                     # parecer narrativo desligado definitivamente (zero custo de tokens)
                     st.info(
@@ -986,7 +986,7 @@ def render_main():
                                              name="Execução (R acumulado)"))
                 fig_j.update_layout(title="Curva de execução (qualidade do plano, em R)",
                                     height=280, template="plotly_white")
-                st.plotly_chart(fig_j, width="stretch", config=_PLOTLY_CONFIG)
+                st.plotly_chart(fig_j, use_container_width=True, config=_PLOTLY_CONFIG)
 
             with st.expander(f"📋 Histórico ({len(entries)})"):
                 df_j = pd.DataFrame(entries)
@@ -1155,7 +1155,7 @@ def render_main():
 
     # ------------------------------------------------------------------ Dados brutos
     with st.expander("📄 Dados brutos (últimos candles)"):
-        st.dataframe(df.tail(200), width="stretch")
+        st.dataframe(df.tail(200), use_container_width=True)
 
     # ------------------------------------------------------------------ Rodapé honesto
     st.markdown("---")
