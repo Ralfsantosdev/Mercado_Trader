@@ -620,12 +620,15 @@ def render_main():
             except Exception:
                 pass
                 
-        # Zonas de Liquidez (SMC FVG) no gráfico
+        # Zonas de Liquidez (SMC FVG e BSL/SSL) no gráfico
         if smc_alerts_enabled:
-            from indicators import get_active_fvgs
+            from indicators import get_active_fvgs, get_active_swings
             bull_gaps, bear_gaps = get_active_fvgs(df_plot)
+            bsl, ssl = get_active_swings(df_plot)
+            
             shapes = []
             
+            # FVGs (Zonas de Desequilíbrio institucionais)
             for g in bull_gaps:
                 shapes.append(dict(
                     type="rect", xref="x", yref="y",
@@ -640,6 +643,23 @@ def render_main():
                     y0=g["bot"], y1=g["top"],
                     fillcolor="rgba(239, 83, 80, 0.15)", line_width=0, layer="below"
                 ))
+                
+            # Liquidez Externa (Buy-Side e Sell-Side) - "Poços da Sardinhada"
+            for b in bsl:
+                shapes.append(dict(
+                    type="line", xref="x", yref="y",
+                    x0=b["time"], x1=df_plot.index[-1],
+                    y0=b["price"], y1=b["price"],
+                    line=dict(color="orange", width=1.5, dash="dashdot"), layer="below"
+                ))
+            for s in ssl:
+                shapes.append(dict(
+                    type="line", xref="x", yref="y",
+                    x0=s["time"], x1=df_plot.index[-1],
+                    y0=s["price"], y1=s["price"],
+                    line=dict(color="purple", width=1.5, dash="dashdot"), layer="below"
+                ))
+                
             if shapes:
                 fig.update_layout(shapes=shapes)
 

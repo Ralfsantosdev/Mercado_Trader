@@ -136,6 +136,31 @@ def get_active_fvgs(df: pd.DataFrame, max_lookback: int = 150):
         
     return bull_gaps, bear_gaps
 
+def find_swing_liquidity(df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
+    """Encontra Swing Highs (BSL) e Swing Lows (SSL) para mapear liquidez de varejo (stops)."""
+    # Fractal básico: o topo/fundo é o maior/menor de uma janela de X candles (ex: 5)
+    df["Swing_High"] = df["High"] == df["High"].rolling(window=window, center=True).max()
+    df["Swing_Low"] = df["Low"] == df["Low"].rolling(window=window, center=True).min()
+    return df
+
+def get_active_swings(df: pd.DataFrame, max_lookback: int = 150):
+    """Retorna a liquidez externa (Buy-Side e Sell-Side) não capturada."""
+    recent = df.iloc[-max_lookback:] if len(df) > max_lookback else df
+    bsl = []
+    ssl = []
+    
+    for idx, row in recent.iterrows():
+        if row.get("Swing_High") == True:
+            bsl.append({"price": row["High"], "time": idx})
+        if row.get("Swing_Low") == True:
+            ssl.append({"price": row["Low"], "time": idx})
+            
+        # Mitigação (Sweep): A sardinhada foi 'stopada' se o preço passou do nível
+        bsl = [s for s in bsl if row["High"] < s["price"]]
+        ssl = [s for s in ssl if row["Low"] > s["price"]]
+        
+    return bsl, ssl
+
 
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Recebe OHLCV e devolve com todos os indicadores usados no dashboard."""
@@ -179,5 +204,6 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Rsi_vs_50"] = df["RSI"] - 50
 
     df = find_liquidity_pools(df)
+    df = find_swing_liquidity(df)
 
     return df
