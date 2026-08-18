@@ -107,8 +107,8 @@ source = st.sidebar.selectbox(
 )
 
 _awesome_symbols = [
-    "EUR-USD", "GBP-USD", "USD-JPY", "AUD-USD", "USD-CAD", "NZD-USD", "USD-CHF",
-    "EUR-GBP", "EUR-JPY", "XAU-USD", "USD-BRL", "EUR-BRL", "BTC-BRL", "ETH-BRL", "DOGE-BRL",
+    "XAU-USD", "EUR-USD", "GBP-USD", "USD-JPY", "AUD-USD", "USD-CAD", "NZD-USD", "USD-CHF",
+    "EUR-GBP", "EUR-JPY", "USD-BRL", "EUR-BRL", "BTC-BRL", "ETH-BRL", "DOGE-BRL",
 ]
 _yfinance_symbols = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X"]
 
@@ -120,8 +120,8 @@ symbol = st.sidebar.selectbox(
 
 interval = st.sidebar.selectbox(
     "Timeframe",
-    ["1m", "5m", "15m", "30m", "1h", "1d"],
-    index=4,
+    ["1m", "2m", "5m", "15m", "30m", "1h", "1d"],
+    index=3,
     help="awesomeapi fornece ticks de ~1 min e o app remonta candles no timeframe "
          "pedido (dados reais, diferente do Yahoo que não entrega forex intradiário). "
          "Para 1d usa o endpoint de fechamento diário.",
@@ -130,9 +130,9 @@ interval = st.sidebar.selectbox(
 # Limites de histórico por fonte/timeframe
 if source == "awesomeapi":
     # intraday: montado de ticks de 1 min via paginação (~30 dias); diário: até 360 dias
-    _max_days = {"1m": 1, "5m": 30, "15m": 30, "30m": 30, "1h": 30, "1d": 360}[interval]
+    _max_days = {"1m": 1, "2m": 2, "5m": 30, "15m": 30, "30m": 30, "1h": 30, "1d": 360}[interval]
 else:
-    _max_days = {"1m": 7, "5m": 60, "15m": 60, "30m": 45, "1h": 365, "1d": 365}[interval]
+    _max_days = {"1m": 7, "2m": 14, "5m": 60, "15m": 60, "30m": 45, "1h": 365, "1d": 365}[interval]
 
 # Streamlit slider requires min_value < max_value
 _max_days = max(2, _max_days)
@@ -269,11 +269,74 @@ min_tick_vol = st.sidebar.number_input("Volume de tick mínimo", min_value=0, ma
                                        help="Entradas são bloqueadas quando o candle atual tem menos "
                                             "que isso de volume de tick real. 0 desliga.")
 
+st.sidebar.subheader("🚀 Robô Autônomo (Background)")
+st.sidebar.caption("Inicia a execução institucional em 2º plano. Ele usa os parâmetros exatos definidos acima.")
+
+import subprocess
+import os
+import signal
+
+pid_file = "robot.pid"
+robot_running = False
+if os.path.exists(pid_file):
+    try:
+        with open(pid_file, "r") as f:
+            robot_pid = int(f.read().strip())
+        os.kill(robot_pid, 0) # verifica se o processo existe
+        robot_running = True
+    except (OSError, ValueError):
+        os.remove(pid_file)
+
+if robot_running:
+    st.sidebar.success("🟢 Robô está RODANDO (ver /tmp/trader_bg.log)")
+    if st.sidebar.button("⏹️ Parar Robô", use_container_width=True):
+        try:
+            with open(pid_file, "r") as f:
+                robot_pid = int(f.read().strip())
+            os.kill(robot_pid, signal.SIGTERM)
+            os.remove(pid_file)
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Erro: {e}")
+else:
+    st.sidebar.info("⚪ Robô está PARADO")
+    if st.sidebar.button("▶️ Ligar Robô", type="primary", use_container_width=True):
+        cmd = [
+            "python3", "alerts.py", "--check", "--execute",
+            "--symbol", symbol, "--interval", interval, "--days", str(days),
+            "--rsi-ob", str(rsi_ob), "--rsi-os", str(rsi_os),
+            "--trigger-mode", trigger_mode, "--pullback-ema", str(pullback_ema),
+            "--min-adx", str(min_adx), "--sl-atr", str(sl_atr), "--tp-atr", str(tp_atr),
+            "--risk-pct", str(risk_pct), "--pip-size", str(_pip_size),
+            "--fimathe-hour", str(int(fimathe_hour)), "--fimathe-candles", str(int(fimathe_candles)),
+            "--fimathe-max-pips", str(fimathe_max_pips),
+            "--source", source, "--continuous"
+        ]
+        if not use_cross:
+            cmd.append("--no-cross")
+        if not use_volume:
+            cmd.append("--no-volume")
+        if smc_alerts_enabled:
+            cmd.append("--smc-alerts")
+        cmd.extend(["--session", session])
+        
+        try:
+            with open("/tmp/trader_bg.log", "a") as logfile:
+                p = subprocess.Popen(cmd, stdout=logfile, stderr=subprocess.STDOUT, preexec_fn=os.setpgrp)
+            with open(pid_file, "w") as f:
+                f.write(str(p.pid))
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Erro ao iniciar: {e}")
+
 st.sidebar.subheader("📣 Alertas Telegram")
 import alerts as alerts_mod
 alerts_enabled = st.sidebar.checkbox("Notificar mudança de sinal no Telegram", value=False,
                                      help="Envia mensagem quando o sinal muda (neutro→compra, etc.). "
                                           "Configura telegram_token e telegram_chat no secrets.toml.")
+smc_alerts_enabled = st.sidebar.checkbox("🧲 Alertas SMC (Poços de Liquidez)", value=True,
+                                         help="Alerta e exibe no gráfico quando o preço entra em um Fair Value Gap (FVG), "
+                                              "mesmo sem sinal de entrada formal.")
 if st.sidebar.button("📤 Enviar alerta de teste"):
     if not alerts_mod.configured():
         st.sidebar.error("Configure telegram_token e telegram_chat no .streamlit/secrets.toml primeiro.")
@@ -288,6 +351,9 @@ auto_refresh = st.sidebar.checkbox(f"Ativado (a cada {refresh_label})", value=Tr
 
 if st.sidebar.button("🔄 Atualizar dados agora"):
     st.cache_data.clear()
+
+st.sidebar.subheader("🎨 Visual do Gráfico")
+chart_type = st.sidebar.radio("Tipo de Gráfico", ["Candles", "Barras (OHLC)"], index=0, horizontal=True)
 
 st.sidebar.caption(
     "Fonte: **AwesomeAPI** em tempo real (chave em `.streamlit/secrets.toml`) "
@@ -360,13 +426,12 @@ def ai_analysis_cached(df, direction, sl_atr, tp_atr, spread_pips, pip_size,
 def _mt5_live_quote(symbol):
     """Busca quote real do MT5 (spread/tick volume). None se bridge indisponível."""
     try:
-        from mt5_bridge import MT5Bridge
-        m = MT5Bridge()
+        from mt5_bridge import get_bridge
+        m = get_bridge()
         if not m.available():
             return None
         m.initialize()
         q = m.quote(symbol.replace("-", ""))
-        m.shutdown()
         return q if q.get("bid", 0) else None
     except Exception:
         return None
@@ -496,13 +561,22 @@ def render_main():
         df_plot = df.iloc[-n_plot:]
 
         fig = go.Figure()
-        fig.add_trace(go.Candlestick(
-            x=df_plot.index, open=df_plot["Open"], high=df_plot["High"], low=df_plot["Low"],
-            close=df_plot["Close"], name="OHLC",
-            increasing_line_color="#26A69A", decreasing_line_color="#EF5350",
-            increasing_fillcolor="#26A69A", decreasing_fillcolor="#EF5350",
-            line=dict(width=1), whiskerwidth=0.4,
-        ))
+        
+        if chart_type == "Barras (OHLC)":
+            fig.add_trace(go.Ohlc(
+                x=df_plot.index, open=df_plot["Open"], high=df_plot["High"], low=df_plot["Low"],
+                close=df_plot["Close"], name="OHLC",
+                increasing_line_color="#26A69A", decreasing_line_color="#EF5350",
+                line=dict(width=1),
+            ))
+        else:
+            fig.add_trace(go.Candlestick(
+                x=df_plot.index, open=df_plot["Open"], high=df_plot["High"], low=df_plot["Low"],
+                close=df_plot["Close"], name="OHLC",
+                increasing_line_color="#26A69A", decreasing_line_color="#EF5350",
+                increasing_fillcolor="#26A69A", decreasing_fillcolor="#EF5350",
+                line=dict(width=1), whiskerwidth=0.4,
+            ))
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_9"], name="MM 9",
                                  line=dict(color="#42A5F5", width=1)))
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_21"], name="MM 21",
@@ -544,6 +618,30 @@ def render_main():
                                       annotation_text=f"TP {_open_pos['tp']:.5f}")
             except Exception:
                 pass
+                
+        # Zonas de Liquidez (SMC FVG) no gráfico
+        if smc_alerts_enabled and "FVG_Bull_Top" in df_plot.columns:
+            # Pega o ultimo valor valido na janela visível para plotar o gap
+            bull_top = float(df_plot["FVG_Bull_Top"].iloc[-1]) if pd.notna(df_plot["FVG_Bull_Top"].iloc[-1]) else None
+            bull_bot = float(df_plot["FVG_Bull_Bot"].iloc[-1]) if pd.notna(df_plot["FVG_Bull_Bot"].iloc[-1]) else None
+            bear_top = float(df_plot["FVG_Bear_Top"].iloc[-1]) if pd.notna(df_plot["FVG_Bear_Top"].iloc[-1]) else None
+            bear_bot = float(df_plot["FVG_Bear_Bot"].iloc[-1]) if pd.notna(df_plot["FVG_Bear_Bot"].iloc[-1]) else None
+            
+            shapes = []
+            if bull_top and bull_bot:
+                shapes.append(dict(
+                    type="rect", xref="paper", yref="y", x0=0, x1=1,
+                    y0=bull_bot, y1=bull_top,
+                    fillcolor="rgba(38, 166, 154, 0.15)", line_width=0, layer="below"
+                ))
+            if bear_top and bear_bot:
+                shapes.append(dict(
+                    type="rect", xref="paper", yref="y", x0=0, x1=1,
+                    y0=bear_bot, y1=bear_top,
+                    fillcolor="rgba(239, 83, 80, 0.15)", line_width=0, layer="below"
+                ))
+            if shapes:
+                fig.update_layout(shapes=shapes)
 
         fig.update_layout(
             height=600,

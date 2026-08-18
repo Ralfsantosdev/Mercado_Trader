@@ -31,6 +31,21 @@ CONNECT_TIMEOUT = 5.0
 
 _lock = threading.Lock()
 
+# Instância compartilhada do processo — evita abrir/derrubar a conexão do
+# terminal a cada chamada (causa o MT5 travar com initialize/shutdown a cada refresh).
+_shared_bridge = None
+_shared_lock = threading.Lock()
+
+
+def get_bridge() -> "MT5Bridge":
+    """Retorna a ponte única do processo (reconecta sozinha se cair)."""
+    global _shared_bridge
+    if _shared_bridge is None:
+        with _shared_lock:
+            if _shared_bridge is None:
+                _shared_bridge = MT5Bridge()
+    return _shared_bridge
+
 
 class MT5Bridge:
     """Cliente RPyC mínimo para o terminal MetaTrader 5."""
@@ -42,10 +57,13 @@ class MT5Bridge:
 
     # ------------------------------------------------------------- conexão
     def connect(self) -> Optional[rpyc.Connection]:
+        # conexão morta (server reiniciou / caiu): derruba e reconecta
+        if self._conn is not None and self._conn.closed:
+            self._conn = None
         if self._conn is not None:
             return self._conn
         with _lock:
-            if self._conn is not None:
+            if self._conn is not None and not self._conn.closed:
                 return self._conn
             try:
                 conn = rpyc.classic.connect(self.host, self.port)
@@ -158,7 +176,7 @@ class MT5Bridge:
             "spread": max(ask - bid, 0.0),
             "last": float(getattr(tick, "last", 0.0) or 0.0),
             "tick_volume": float(getattr(tick, "volume", 0.0) or 0.0),
-            "day_volume": float(getattr(s, "trade_volume", 0.0) or 0.0),
+            "day_volume": float(getattr(s, "volume", 0.0) or 0.0),
             "point": float(getattr(s, "point", 0.0) or 0.0),
             "digits": int(getattr(s, "digits", 0) or 0),
             "volume_min": float(getattr(s, "volume_min", 0.01) or 0.01),

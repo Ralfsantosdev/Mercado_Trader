@@ -240,7 +240,7 @@ class AwesomeAPIProvider(DataProvider):
         df.sort_index(inplace=True)
         df = df[~df.index.duplicated(keep="last")]
 
-        freq_map = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h"}
+        freq_map = {"1m": "1min", "2m": "2min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h"}
         freq = freq_map.get(interval, "5min")
         ohlc = df["price"].resample(freq).agg(["first", "max", "min", "last"])
         volume = df["vol"].resample(freq).sum()
@@ -299,12 +299,71 @@ class AwesomeAPIProvider(DataProvider):
         return list(uniq.values())
 
 
+class MT5Provider(DataProvider):
+    """Fonte de dados institucional: MetaTrader 5 (dados diretos da corretora).
+    Livre das limitações e rate-limits da AwesomeAPI/Yahoo."""
+
+    def __init__(self):
+        from mt5_bridge import get_bridge
+        self.bridge = get_bridge()
+        if not self.bridge.available():
+            raise RuntimeError("Servidor MT5 (mt5server.exe) não está rodando ou não disponível.")
+
+    def get_ohlcv(self, symbol: str, days: int, interval: str) -> pd.DataFrame:
+        from mt5_bridge import mt5_symbol
+        sym = mt5_symbol(symbol)
+        
+        freq_map = {
+            "1m": "mt5.TIMEFRAME_M1",
+            "2m": "mt5.TIMEFRAME_M2",
+            "5m": "mt5.TIMEFRAME_M5",
+            "15m": "mt5.TIMEFRAME_M15",
+            "30m": "mt5.TIMEFRAME_M30",
+            "1h": "mt5.TIMEFRAME_H1",
+            "1d": "mt5.TIMEFRAME_D1",
+        }
+        tf = freq_map.get(interval, "mt5.TIMEFRAME_M5")
+        
+        bars_per_day = {"1m": 1440, "2m": 720, "5m": 288, "15m": 96, "30m": 48, "1h": 24, "1d": 1}.get(interval, 288)
+        num_bars = max(bars_per_day * days, 100)
+
+        # Monta a query para rodar no Python remoto do MT5 e devolver lista de dicts puros
+        code = (
+            f"mt5.initialize(); "
+            f"rates = mt5.copy_rates_from_pos('{sym}', {tf}, 0, {num_bars}); "
+            f"[{{"
+            f"'datetime': int(r['time']), "
+            f"'open': float(r['open']), "
+            f"'high': float(r['high']), "
+            f"'low': float(r['low']), "
+            f"'close': float(r['close']), "
+            f"'volume': float(r['tick_volume'])"
+            f"}} for r in (rates if rates is not None else [])]"
+        )
+        
+        try:
+            data = self.bridge._eval(code)
+        except Exception as e:
+            raise RuntimeError(f"Falha ao consultar MT5 para {symbol}: {e}")
+            
+        if not data:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(data)
+        df["datetime"] = pd.to_datetime(df["datetime"], unit="s", tz="UTC")
+        df.set_index("datetime", inplace=True)
+        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        return df
+
+
 def get_provider(source: str = "awesomeapi", csv_path: Optional[str] = None, api_key: Optional[str] = None) -> DataProvider:
     """Fábrica — fonte padrão é a AwesomeAPI (tempo real). troque aqui se migrar."""
     if source == "awesomeapi":
         return AwesomeAPIProvider(api_key=api_key)
     elif source == "yfinance":
         return YFinanceProvider()
+    elif source == "mt5":
+        return MT5Provider()
     elif source == "csv":
         if not csv_path:
             raise ValueError("csv_path é obrigatório quando source='csv'")

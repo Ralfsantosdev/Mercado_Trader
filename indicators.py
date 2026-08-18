@@ -92,6 +92,27 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
     return dx.ewm(alpha=1 / length, adjust=False).mean()
 
 
+def find_liquidity_pools(df: pd.DataFrame) -> pd.DataFrame:
+    """Encontra FVGs (Fair Value Gaps) de SMC para mapear poços de liquidez."""
+    # FVG Bullish: Gap de alta (Low atual > High de 2 candles atrás)
+    bull_fvg = df["Low"] > df["High"].shift(2)
+    df.loc[bull_fvg, "FVG_Bull_Top"] = df["Low"]
+    df.loc[bull_fvg, "FVG_Bull_Bot"] = df["High"].shift(2)
+
+    # FVG Bearish: Gap de baixa (High atual < Low de 2 candles atrás)
+    bear_fvg = df["High"] < df["Low"].shift(2)
+    df.loc[bear_fvg, "FVG_Bear_Top"] = df["Low"].shift(2)
+    df.loc[bear_fvg, "FVG_Bear_Bot"] = df["High"]
+    
+    # Estende as zonas para a frente por 20 candles (para o robô ver que o preço está chegando lá)
+    df["FVG_Bull_Top"] = df["FVG_Bull_Top"].ffill(limit=20)
+    df["FVG_Bull_Bot"] = df["FVG_Bull_Bot"].ffill(limit=20)
+    df["FVG_Bear_Top"] = df["FVG_Bear_Top"].ffill(limit=20)
+    df["FVG_Bear_Bot"] = df["FVG_Bear_Bot"].ffill(limit=20)
+    
+    return df
+
+
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Recebe OHLCV e devolve com todos os indicadores usados no dashboard."""
     df = df.copy()
@@ -132,5 +153,7 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Ret_5"] = df["Close"].pct_change(5)
     df["Sma_9_vs_21"] = df["SMA_9"] / df["SMA_21"] - 1
     df["Rsi_vs_50"] = df["RSI"] - 50
+
+    df = find_liquidity_pools(df)
 
     return df

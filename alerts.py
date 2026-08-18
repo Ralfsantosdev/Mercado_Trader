@@ -145,7 +145,9 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
                  risk_pct: float = 0.25,
                  pip_size: float = 0.0001,
                  fimathe_hour: int = 20, fimathe_candles: int = 4,
-                 fimathe_max_pips: float = 30.0) -> str:
+                 fimathe_max_pips: float = 30.0,
+                 source: str = "awesomeapi",
+                 smc_alerts: bool = False) -> str:
     """
     Verifica o último candle e notifica o Telegram SE o sinal mudou.
     Com execute=True, também executa a ordem no MetaTrader 5 (abre/fecha
@@ -174,11 +176,11 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
         pip_size = 0.01 if any(k in symbol.upper() for k in ("XAU", "JPY")) else 0.0001
 
     try:
-        df = get_provider(source="awesomeapi", api_key=api_key or None).get_ohlcv(
+        df = get_provider(source=source, api_key=api_key or None).get_ohlcv(
             symbol, days=days, interval=interval
         )
     except Exception as e:
-        return f"❌ Erro na AwesomeAPI {symbol} {interval}: {e}"
+        return f"❌ Erro na {source} {symbol} {interval}: {e}"
     if df.empty:
         return f"⚠️ Sem dados para {symbol} {interval}."
 
@@ -210,6 +212,29 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
         _sug_sl = float(df["Suggested_SL"].iloc[-1])
     if "Suggested_TP" in df.columns and pd.notna(df["Suggested_TP"].iloc[-1]):
         _sug_tp = float(df["Suggested_TP"].iloc[-1])
+
+    # SMC / Liquidez Alert logic
+    fvg_alert = None
+    if smc_alerts and "FVG_Bull_Top" in df.columns:
+        bull_top = float(df["FVG_Bull_Top"].iloc[-1]) if pd.notna(df["FVG_Bull_Top"].iloc[-1]) else None
+        bear_bot = float(df["FVG_Bear_Bot"].iloc[-1]) if pd.notna(df["FVG_Bear_Bot"].iloc[-1]) else None
+        
+        # Margem de aproximação de 0.15% (15 pips para 1.0000)
+        margin = 0.0015
+        
+        if bull_top and 0 <= (last_close - bull_top) / bull_top <= margin:
+            fvg_alert = f"🧲 *SMC / ZONA DE LIQUIDEZ*\nPreço chegando no FVG de COMPRA (Suporte em `{bull_top:.5f}`).\nIdeal para você entrar manualmente com confirmação de price-action!"
+        elif bear_bot and 0 <= (bear_bot - last_close) / bear_bot <= margin:
+            fvg_alert = f"🧲 *SMC / ZONA DE LIQUIDEZ*\nPreço chegando no FVG de VENDA (Resistência em `{bear_bot:.5f}`).\nIdeal para você entrar manualmente com confirmação de price-action!"
+
+    if fvg_alert:
+        state = _load_state()
+        fvg_key = f"{symbol}_fvg"
+        last_fvg = state.get(fvg_key, {}).get("msg", "")
+        if last_fvg != fvg_alert or force:
+            send_telegram(fvg_alert)
+            state[fvg_key] = {"msg": fvg_alert, "ts": datetime.now().isoformat()}
+            _save_state(state)
 
     # notifica o Telegram se o sinal mudou
     msg = notify_signal_change(symbol, last_signal, last_close, interval, force=force)
@@ -248,7 +273,7 @@ if __name__ == "__main__":
     parser.add_argument("--execute", action="store_true",
                         help="Também executa a ordem no MetaTrader 5 (abre/fecha automático)")
     parser.add_argument("--symbol", default="EUR-USD", help="Par (default: EUR-USD)")
-    parser.add_argument("--interval", default="15m", choices=["1m", "5m", "15m", "30m", "1h", "1d"])
+    parser.add_argument("--interval", default="15m", choices=["1m", "2m", "5m", "15m", "30m", "1h", "1d"])
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--rsi-ob", type=float, default=70)
     parser.add_argument("--rsi-os", type=float, default=30)
@@ -269,10 +294,41 @@ if __name__ == "__main__":
     parser.add_argument("--fimathe-candles", type=int, default=4, help="Duração do Canal de Referência")
     parser.add_argument("--fimathe-max-pips", type=float, default=30.0, help="Fatiamento do canal em pips")
     parser.add_argument("--force", action="store_true", help="Ignora o estado salvo e notifica sempre")
+    parser.add_argument("--source", default="awesomeapi", choices=["awesomeapi", "yfinance", "mt5"], 
+                        help="Fonte de dados (use mt5 para execução institucional)")
+    parser.add_argument("--continuous", action="store_true", help="Roda continuamente em loop (Event-Driven)")
+    parser.add_argument("--smc-alerts", action="store_true", help="Ativa alertas de aproximação de zonas de liquidez SMC (FVG)")
     args = parser.parse_args()
 
     if args.test or not args.check:
         print(send_test_alert())
+    elif args.continuous:
+        import time
+        print("🚀 Iniciando robô em modo institucional (Event-Driven)...")
+        print(f"Fonte de dados: {args.source.upper()}")
+        print("Pressione Ctrl+C para interromper.")
+        while True:
+            try:
+                res = check_signal(
+                    symbol=args.symbol, interval=args.interval, days=args.days,
+                    rsi_ob=args.rsi_ob, rsi_os=args.rsi_os,
+                    use_cross=not args.no_cross, use_volume=not args.no_volume,
+                    trigger_mode=args.trigger_mode, pullback_ema=args.pullback_ema,
+                    session=args.session, min_adx=args.min_adx, force=args.force,
+                    execute=args.execute, sl_atr=args.sl_atr, tp_atr=args.tp_atr,
+                    risk_pct=args.risk_pct, pip_size=args.pip_size,
+                    fimathe_hour=args.fimathe_hour, fimathe_candles=args.fimathe_candles,
+                    fimathe_max_pips=args.fimathe_max_pips, source=args.source,
+                    smc_alerts=args.smc_alerts,
+                )
+                if "Neutro" not in res and "sem dados" not in res and "Erro" not in res:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {res}")
+            except KeyboardInterrupt:
+                print("\nRobô interrompido pelo usuário.")
+                break
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Erro no loop: {e}")
+            time.sleep(1)
     elif args.check:
         print(check_signal(
             symbol=args.symbol, interval=args.interval, days=args.days,
@@ -283,5 +339,6 @@ if __name__ == "__main__":
             execute=args.execute, sl_atr=args.sl_atr, tp_atr=args.tp_atr,
             risk_pct=args.risk_pct, pip_size=args.pip_size,
             fimathe_hour=args.fimathe_hour, fimathe_candles=args.fimathe_candles,
-            fimathe_max_pips=args.fimathe_max_pips,
+            fimathe_max_pips=args.fimathe_max_pips, source=args.source,
+            smc_alerts=args.smc_alerts,
         ))

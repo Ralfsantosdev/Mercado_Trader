@@ -289,8 +289,8 @@ class Mt5Broker(Broker):
     # ------------------------------------------------------------ helpers
     def _mt5(self):
         if self._bridge is None:
-            from mt5_bridge import MT5Bridge
-            self._bridge = MT5Bridge()
+            from mt5_bridge import get_bridge
+            self._bridge = get_bridge()
         return self._bridge
 
     def available(self) -> bool:
