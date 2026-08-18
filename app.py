@@ -269,6 +269,10 @@ min_tick_vol = st.sidebar.number_input("Volume de tick mínimo", min_value=0, ma
                                        help="Entradas são bloqueadas quando o candle atual tem menos "
                                             "que isso de volume de tick real. 0 desliga.")
 
+smc_alerts_enabled = st.sidebar.checkbox("🧲 Alertas SMC (Poços de Liquidez)", value=True,
+                                         help="Alerta e exibe no gráfico quando o preço entra em um Fair Value Gap (FVG), "
+                                              "mesmo sem sinal de entrada formal.")
+
 st.sidebar.subheader("🚀 Robô Autônomo (Background)")
 st.sidebar.caption("Inicia a execução institucional em 2º plano. Ele usa os parâmetros exatos definidos acima.")
 
@@ -334,9 +338,6 @@ import alerts as alerts_mod
 alerts_enabled = st.sidebar.checkbox("Notificar mudança de sinal no Telegram", value=False,
                                      help="Envia mensagem quando o sinal muda (neutro→compra, etc.). "
                                           "Configura telegram_token e telegram_chat no secrets.toml.")
-smc_alerts_enabled = st.sidebar.checkbox("🧲 Alertas SMC (Poços de Liquidez)", value=True,
-                                         help="Alerta e exibe no gráfico quando o preço entra em um Fair Value Gap (FVG), "
-                                              "mesmo sem sinal de entrada formal.")
 if st.sidebar.button("📤 Enviar alerta de teste"):
     if not alerts_mod.configured():
         st.sidebar.error("Configure telegram_token e telegram_chat no .streamlit/secrets.toml primeiro.")
