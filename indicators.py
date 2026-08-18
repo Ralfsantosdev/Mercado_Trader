@@ -128,9 +128,11 @@ def get_active_fvgs(df: pd.DataFrame, max_lookback: int = 150):
         if pd.notna(row.get("FVG_Bear_Top")):
             bear_gaps.append({"top": row["FVG_Bear_Top"], "bot": row["FVG_Bear_Bot"], "time": idx})
             
-        # Remove gaps que foram mitigados (preenchidos)
-        bull_gaps = [g for g in bull_gaps if row["Low"] <= g["bot"] == False]
-        bear_gaps = [g for g in bear_gaps if row["High"] >= g["top"] == False]
+        # Remove gaps que foram mitigados (preenchidos pelo preço)
+        # Um gap de compra continua ativo enquanto o preço não cair abaixo do seu fundo
+        bull_gaps = [g for g in bull_gaps if row["Low"] > g["bot"]]
+        # Um gap de venda continua ativo enquanto o preço não subir acima do seu topo
+        bear_gaps = [g for g in bear_gaps if row["High"] < g["top"]]
         
     return bull_gaps, bear_gaps
 
