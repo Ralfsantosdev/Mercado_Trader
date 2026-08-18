@@ -215,17 +215,31 @@ def check_signal(symbol: str = "EUR-USD", interval: str = "15m", days: int = 30,
 
     # SMC / Liquidez Alert logic
     fvg_alert = None
-    if smc_alerts and "FVG_Bull_Top" in df.columns:
-        bull_top = float(df["FVG_Bull_Top"].iloc[-1]) if pd.notna(df["FVG_Bull_Top"].iloc[-1]) else None
-        bear_bot = float(df["FVG_Bear_Bot"].iloc[-1]) if pd.notna(df["FVG_Bear_Bot"].iloc[-1]) else None
+    if smc_alerts:
+        from indicators import get_active_fvgs
+        bull_gaps, bear_gaps = get_active_fvgs(df, max_lookback=100)
         
         # Margem de aproximação de 0.15% (15 pips para 1.0000)
         margin = 0.0015
         
-        if bull_top and 0 <= (last_close - bull_top) / bull_top <= margin:
-            fvg_alert = f"🧲 *SMC / ZONA DE LIQUIDEZ*\nPreço chegando no FVG de COMPRA (Suporte em `{bull_top:.5f}`).\nIdeal para você entrar manualmente com confirmação de price-action!"
-        elif bear_bot and 0 <= (bear_bot - last_close) / bear_bot <= margin:
-            fvg_alert = f"🧲 *SMC / ZONA DE LIQUIDEZ*\nPreço chegando no FVG de VENDA (Resistência em `{bear_bot:.5f}`).\nIdeal para você entrar manualmente com confirmação de price-action!"
+        # Encontra o gap de suporte mais próximo (abaixo do preço)
+        closest_bull = None
+        for g in bull_gaps:
+            if last_close >= g["top"]:
+                if closest_bull is None or (last_close - g["top"]) < (last_close - closest_bull["top"]):
+                    closest_bull = g
+                    
+        # Encontra o gap de resistência mais próximo (acima do preço)
+        closest_bear = None
+        for g in bear_gaps:
+            if last_close <= g["bot"]:
+                if closest_bear is None or (g["bot"] - last_close) < (closest_bear["bot"] - last_close):
+                    closest_bear = g
+
+        if closest_bull and 0 <= (last_close - closest_bull["top"]) / closest_bull["top"] <= margin:
+            fvg_alert = f"🧲 *SMC / ZONA DE LIQUIDEZ*\nPreço testando o FVG de COMPRA (Suporte em `{closest_bull['top']:.5f}`).\nIdeal para você entrar manualmente com confirmação de price-action!"
+        elif closest_bear and 0 <= (closest_bear["bot"] - last_close) / closest_bear["bot"] <= margin:
+            fvg_alert = f"🧲 *SMC / ZONA DE LIQUIDEZ*\nPreço testando o FVG de VENDA (Resistência em `{closest_bear['bot']:.5f}`).\nIdeal para você entrar manualmente com confirmação de price-action!"
 
     if fvg_alert:
         state = _load_state()

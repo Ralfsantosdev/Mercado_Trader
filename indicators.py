@@ -94,6 +94,11 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
 
 def find_liquidity_pools(df: pd.DataFrame) -> pd.DataFrame:
     """Encontra FVGs (Fair Value Gaps) de SMC para mapear poços de liquidez."""
+    # Inicializa as colunas
+    for col in ["FVG_Bull_Top", "FVG_Bull_Bot", "FVG_Bear_Top", "FVG_Bear_Bot"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
     # FVG Bullish: Gap de alta (Low atual > High de 2 candles atrás)
     bull_fvg = df["Low"] > df["High"].shift(2)
     df.loc[bull_fvg, "FVG_Bull_Top"] = df["Low"]
@@ -104,13 +109,30 @@ def find_liquidity_pools(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[bear_fvg, "FVG_Bear_Top"] = df["Low"].shift(2)
     df.loc[bear_fvg, "FVG_Bear_Bot"] = df["High"]
     
-    # Estende as zonas para a frente por 20 candles (para o robô ver que o preço está chegando lá)
-    df["FVG_Bull_Top"] = df["FVG_Bull_Top"].ffill(limit=20)
-    df["FVG_Bull_Bot"] = df["FVG_Bull_Bot"].ffill(limit=20)
-    df["FVG_Bear_Top"] = df["FVG_Bear_Top"].ffill(limit=20)
-    df["FVG_Bear_Bot"] = df["FVG_Bear_Bot"].ffill(limit=20)
-    
     return df
+
+def get_active_fvgs(df: pd.DataFrame, max_lookback: int = 150):
+    """
+    Retorna listas de gaps de compra e venda não mitigados.
+    Um gap é mitigado quando o preço o preenche completamente.
+    """
+    recent = df.iloc[-max_lookback:] if len(df) > max_lookback else df
+    
+    bull_gaps = []
+    bear_gaps = []
+    
+    for idx, row in recent.iterrows():
+        # Se achou um gap, adiciona na lista
+        if pd.notna(row.get("FVG_Bull_Top")):
+            bull_gaps.append({"top": row["FVG_Bull_Top"], "bot": row["FVG_Bull_Bot"], "time": idx})
+        if pd.notna(row.get("FVG_Bear_Top")):
+            bear_gaps.append({"top": row["FVG_Bear_Top"], "bot": row["FVG_Bear_Bot"], "time": idx})
+            
+        # Remove gaps que foram mitigados (preenchidos)
+        bull_gaps = [g for g in bull_gaps if row["Low"] <= g["bot"] == False]
+        bear_gaps = [g for g in bear_gaps if row["High"] >= g["top"] == False]
+        
+    return bull_gaps, bear_gaps
 
 
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:

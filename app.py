@@ -620,24 +620,23 @@ def render_main():
                 pass
                 
         # Zonas de Liquidez (SMC FVG) no gráfico
-        if smc_alerts_enabled and "FVG_Bull_Top" in df_plot.columns:
-            # Pega o ultimo valor valido na janela visível para plotar o gap
-            bull_top = float(df_plot["FVG_Bull_Top"].iloc[-1]) if pd.notna(df_plot["FVG_Bull_Top"].iloc[-1]) else None
-            bull_bot = float(df_plot["FVG_Bull_Bot"].iloc[-1]) if pd.notna(df_plot["FVG_Bull_Bot"].iloc[-1]) else None
-            bear_top = float(df_plot["FVG_Bear_Top"].iloc[-1]) if pd.notna(df_plot["FVG_Bear_Top"].iloc[-1]) else None
-            bear_bot = float(df_plot["FVG_Bear_Bot"].iloc[-1]) if pd.notna(df_plot["FVG_Bear_Bot"].iloc[-1]) else None
-            
+        if smc_alerts_enabled:
+            from indicators import get_active_fvgs
+            bull_gaps, bear_gaps = get_active_fvgs(df_plot)
             shapes = []
-            if bull_top and bull_bot:
+            
+            for g in bull_gaps:
                 shapes.append(dict(
-                    type="rect", xref="paper", yref="y", x0=0, x1=1,
-                    y0=bull_bot, y1=bull_top,
+                    type="rect", xref="x", yref="y",
+                    x0=g["time"], x1=df_plot.index[-1],
+                    y0=g["bot"], y1=g["top"],
                     fillcolor="rgba(38, 166, 154, 0.15)", line_width=0, layer="below"
                 ))
-            if bear_top and bear_bot:
+            for g in bear_gaps:
                 shapes.append(dict(
-                    type="rect", xref="paper", yref="y", x0=0, x1=1,
-                    y0=bear_bot, y1=bear_top,
+                    type="rect", xref="x", yref="y",
+                    x0=g["time"], x1=df_plot.index[-1],
+                    y0=g["bot"], y1=g["top"],
                     fillcolor="rgba(239, 83, 80, 0.15)", line_width=0, layer="below"
                 ))
             if shapes:
