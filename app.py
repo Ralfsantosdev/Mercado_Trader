@@ -620,6 +620,11 @@ def render_main():
             except Exception:
                 pass
                 
+        # Define a margem direita (espaço vazio de 15 candles) para o gráfico respirar
+        offset_map = {"1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}
+        minutes = offset_map.get(interval, 15)
+        future_date = df_plot.index[-1] + pd.Timedelta(minutes=minutes * 15)
+        
         # Zonas de Liquidez (SMC FVG e BSL/SSL) no gráfico
         if smc_alerts_enabled:
             from indicators import get_active_fvgs, get_active_swings
@@ -632,14 +637,14 @@ def render_main():
             for g in bull_gaps:
                 shapes.append(dict(
                     type="rect", xref="x", yref="y",
-                    x0=g["time"], x1=df_plot.index[-1],
+                    x0=g["time"], x1=future_date,
                     y0=g["bot"], y1=g["top"],
                     fillcolor="rgba(38, 166, 154, 0.15)", line_width=0, layer="below"
                 ))
             for g in bear_gaps:
                 shapes.append(dict(
                     type="rect", xref="x", yref="y",
-                    x0=g["time"], x1=df_plot.index[-1],
+                    x0=g["time"], x1=future_date,
                     y0=g["bot"], y1=g["top"],
                     fillcolor="rgba(239, 83, 80, 0.15)", line_width=0, layer="below"
                 ))
@@ -648,14 +653,14 @@ def render_main():
             for b in bsl:
                 shapes.append(dict(
                     type="line", xref="x", yref="y",
-                    x0=b["time"], x1=df_plot.index[-1],
+                    x0=b["time"], x1=future_date,
                     y0=b["price"], y1=b["price"],
                     line=dict(color="orange", width=1.5, dash="dashdot"), layer="below"
                 ))
             for s in ssl:
                 shapes.append(dict(
                     type="line", xref="x", yref="y",
-                    x0=s["time"], x1=df_plot.index[-1],
+                    x0=s["time"], x1=future_date,
                     y0=s["price"], y1=s["price"],
                     line=dict(color="purple", width=1.5, dash="dashdot"), layer="below"
                 ))
@@ -673,7 +678,10 @@ def render_main():
             yaxis=dict(fixedrange=False),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        fig.update_xaxes(rangeslider_thickness=0.08)
+        fig.update_xaxes(
+            rangeslider_thickness=0.08,
+            range=[df_plot.index[0], future_date]
+        )
         st.plotly_chart(fig, use_container_width=True, config=_PLOTLY_CONFIG)
 
         # RSI detalhado
