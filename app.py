@@ -678,6 +678,13 @@ def render_main():
             yaxis=dict(fixedrange=False),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
+        # Traço invisível no futuro para forçar o Plotly a mostrar a margem direita
+        fig.add_trace(go.Scatter(
+            x=[future_date], y=[df_plot["Close"].iloc[-1]], 
+            mode="markers", marker=dict(color="rgba(0,0,0,0)"), 
+            showlegend=False, hoverinfo="skip"
+        ))
+
         fig.update_xaxes(
             rangeslider_thickness=0.08,
             range=[df_plot.index[0], future_date]
