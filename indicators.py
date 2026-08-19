@@ -150,14 +150,15 @@ def get_active_swings(df: pd.DataFrame, max_lookback: int = 150):
     ssl = []
     
     for idx, row in recent.iterrows():
+        # 1. Mitigação (Sweep): Remove os stops que já foram varridos pelo preço atual
+        bsl = [s for s in bsl if row["High"] < s["price"]]
+        ssl = [s for s in ssl if row["Low"] > s["price"]]
+
+        # 2. Adiciona novos topos/fundos identificados neste candle
         if row.get("Swing_High") == True:
             bsl.append({"price": row["High"], "time": idx})
         if row.get("Swing_Low") == True:
             ssl.append({"price": row["Low"], "time": idx})
-            
-        # Mitigação (Sweep): A sardinhada foi 'stopada' se o preço passou do nível
-        bsl = [s for s in bsl if row["High"] < s["price"]]
-        ssl = [s for s in ssl if row["Low"] > s["price"]]
         
     return bsl, ssl
 
