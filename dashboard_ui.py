@@ -172,7 +172,10 @@ button[data-baseweb="tab-list"] {{ gap: 2px; }}
 }}
 .stButton > button:hover {{ border-color: var(--ACCENT); color: var(--ACCENT); box-shadow: 0 0 0 3px rgba(56,189,248,0.12); }}
 .stButton > button[kind="primary"], .stButton > button[data-testid="stBaseButton-primary"] {{
-  background: linear-gradient(90deg, var(--ACCENT), #2563eb); color:#04121f; border:none; font-weight:700;
+  background: linear-gradient(90deg, var(--ACCENT), #2563eb); color:#ffffff; border:none; font-weight:700;
+}}
+.stButton > button[kind="primary"]:hover, .stButton > button[data-testid="stBaseButton-primary"]:hover {{
+  background: linear-gradient(90deg, #5cc8fa, #3b82f6); color:#ffffff;
 }}
 
 /* ============================ Tabelas ============================ */
@@ -180,6 +183,120 @@ button[data-baseweb="tab-list"] {{ gap: 2px; }}
 
 /* ============================ Alertas ============================ */
 .stAlert {{ border-radius: 10px; font-size: 13px; }}
+
+/* ============================ Painel de decisão (efeitos) ============================ */
+.decision-panel {{
+  border-radius: 8px; padding: 14px 16px; margin-top: 10px;
+  font-family: 'Manrope', sans-serif;
+  transition: all .3s ease;
+}}
+.decision-panel .d-title {{
+  font-size: 1.1em; font-weight: 700; margin-bottom: 4px;
+}}
+.decision-panel .d-sub {{
+  font-size: 0.9em; opacity: 0.9;
+}}
+
+/* ── ENTRAR: pulso verde + glow ── */
+.decision-enter {{
+  background: linear-gradient(135deg, rgba(52,211,153,0.15), rgba(52,211,153,0.05));
+  border: 1.5px solid rgba(52,211,153,0.6);
+  box-shadow: 0 0 12px rgba(52,211,153,0.2);
+  animation: glow-green 2s ease-in-out infinite;
+}}
+@keyframes glow-green {{
+  0%, 100% {{ box-shadow: 0 0 12px rgba(52,211,153,0.2); }}
+  50%      {{ box-shadow: 0 0 24px rgba(52,211,153,0.45), 0 0 48px rgba(52,211,153,0.15); }}
+}}
+.decision-enter .d-title {{ color: #34d399; }}
+
+/* ── AVALIAR: pulso âmbar suave ── */
+.decision-evaluate {{
+  background: linear-gradient(135deg, rgba(251,191,36,0.12), rgba(251,191,36,0.04));
+  border: 1.5px solid rgba(251,191,36,0.5);
+  box-shadow: 0 0 8px rgba(251,191,36,0.15);
+  animation: glow-amber 3s ease-in-out infinite;
+}}
+@keyframes glow-amber {{
+  0%, 100% {{ box-shadow: 0 0 8px rgba(251,191,36,0.15); }}
+  50%      {{ box-shadow: 0 0 18px rgba(251,191,36,0.35); }}
+}}
+.decision-evaluate .d-title {{ color: #fbbf24; }}
+
+/* ── NÃO ENTRAR: estático, sem animação (não precisa chamar atenção) ── */
+.decision-block {{
+  background: rgba(239,83,80,0.08);
+  border: 1px solid rgba(239,83,80,0.35);
+  opacity: 0.75;
+}}
+.decision-block .d-title {{ color: #ef5350; }}
+
+/* ── Flash de sinal novo ── */
+@keyframes signal-flash {{
+  0%   {{ background-color: rgba(56,189,248,0.25); }}
+  100% {{ background-color: transparent; }}
+}}
+.signal-new {{
+  animation: signal-flash 1.2s ease-out;
+  border-radius: 8px;
+}}
+
+/* ── Tabela de trades ── */
+.trade-table {{
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}}
+.trade-table th {{
+  background: #141f36;
+  color: var(--muted);
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}}
+.trade-table td {{
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(30,41,59,0.5);
+}}
+.trade-table tr:hover {{
+  background: rgba(56,189,248,0.05);
+}}
+.trade-row-gain td {{
+  color: var(--up);
+}}
+.trade-row-loss td {{
+  color: var(--down);
+}}
+.trade-pnl-pos {{
+  color: var(--up);
+  font-weight: 600;
+}}
+.trade-pnl-neg {{
+  color: var(--down);
+  font-weight: 600;
+}}
+.trade-result-badge {{
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}}
+.trade-result-badge.gain {{
+  background: rgba(52,211,153,0.15);
+  color: var(--up);
+  border: 1px solid rgba(52,211,153,0.3);
+}}
+.trade-result-badge.loss {{
+  background: rgba(251,113,133,0.15);
+  color: var(--down);
+  border: 1px solid rgba(251,113,133,0.3);
+}}
 </style>
 """
 
@@ -214,3 +331,31 @@ def quote_card(label: str, value: str, delta: str = "", direction: int = 0) -> s
         f"<div class='q-card {cls}'><div class='lab'>{label}</div>"
         f"<div class='val'>{value}</div>{delta_html}</div>"
     )
+
+
+def trade_table_html(df) -> str:
+    """Gera tabela HTML estilizada de trades com gain/loss colorido."""
+    if df.empty:
+        return "<p style='color: var(--muted);'>Nenhum trade registrado.</p>"
+
+    rows = ""
+    for _, row in df.iterrows():
+        pnl = float(row.get('Lucro ($)', row.get('profit', 0)))
+        pnl_cls = "trade-pnl-pos" if pnl > 0 else "trade-pnl-neg"
+        row_cls = "trade-row-gain" if pnl > 0 else "trade-row-loss"
+        badge_cls = "gain" if pnl > 0 else "loss"
+        badge_text = "✅ Gain" if pnl > 0 else "❌ Loss"
+
+        cells = ""
+        for col in df.columns:
+            val = row[col]
+            if col in ('Lucro ($)', 'profit'):
+                cells += f'<td class="{pnl_cls}">${pnl:+,.2f}</td>'
+            elif col == 'Resultado' or col == 'status':
+                cells += f'<td><span class="trade-result-badge {badge_cls}">{badge_text}</span></td>'
+            else:
+                cells += f'<td>{val}</td>'
+        rows += f'<tr class="{row_cls}">{cells}</tr>'
+
+    headers = "".join(f"<th>{col}</th>" for col in df.columns)
+    return f'<table class="trade-table"><thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table>'

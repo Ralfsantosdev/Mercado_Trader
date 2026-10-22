@@ -4,3 +4,9 @@ pandas>=2.0.0
 numpy>=1.24.0
 plotly>=6.0.0
 scikit-learn>=1.3.0
+google-genai>=1.0.0
+openai>=1.40.0
+# Ponte RPyC para o MetaTrader 5 sob Wine (mt5_bridge.py).
+# Sem este pacote o import falha, available() devolve False em silêncio e o
+# sistema inteiro roda achando que "MT5 indisponível" para sempre.
+rpyc>=5.0.0

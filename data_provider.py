@@ -310,8 +310,13 @@ class MT5Provider(DataProvider):
             raise RuntimeError("Servidor MT5 (mt5server.exe) não está rodando ou não disponível.")
 
     def get_ohlcv(self, symbol: str, days: int, interval: str) -> pd.DataFrame:
-        from mt5_bridge import mt5_symbol
+        return self._fetch_ohlcv(symbol, days, interval)
+
+    @st.cache_data(ttl=30, show_spinner=False)
+    def _fetch_ohlcv(_self, symbol: str, days: int, interval: str) -> pd.DataFrame:
+        from executor import mt5_symbol
         sym = mt5_symbol(symbol)
+        bridge = _self.bridge
         
         freq_map = {
             "1m": "mt5.TIMEFRAME_M1",
@@ -327,22 +332,30 @@ class MT5Provider(DataProvider):
         bars_per_day = {"1m": 1440, "2m": 720, "5m": 288, "15m": 96, "30m": 48, "1h": 24, "1d": 1}.get(interval, 288)
         num_bars = max(bars_per_day * days, 100)
 
-        # Monta a query para rodar no Python remoto do MT5 e devolver lista de dicts puros
-        code = (
-            f"mt5.initialize(); "
-            f"rates = mt5.copy_rates_from_pos('{sym}', {tf}, 0, {num_bars}); "
-            f"[{{"
+        # Garante que está inicializado no lado do servidor
+        bridge.initialize()
+
+        # Monta a query para rodar no Python remoto do MT5 e devolver lista de dicts puros.
+        # O eval do python remoto não aceita atribuições com ';', truthiness de array numpy
+        # nem walrus no iterable da comprehension. E o rpyc devolve containers como netref
+        # (proxy remoto — iterar faz 1 RPC por linha e trava). Por isso serializa a lista
+        # como JSON (str é copiado de uma vez) e faz o parse localmente.
+        build = (
+            f"__import__('json').dumps("
+            f"(lambda d: [] if d is None else [{{"
             f"'datetime': int(r['time']), "
             f"'open': float(r['open']), "
             f"'high': float(r['high']), "
             f"'low': float(r['low']), "
             f"'close': float(r['close']), "
             f"'volume': float(r['tick_volume'])"
-            f"}} for r in (rates if rates is not None else [])]"
+            f"}} for r in d])("
+            f"mt5.copy_rates_from_pos('{sym}', {tf}, 0, {num_bars})))"
         )
-        
+
+        import json
         try:
-            data = self.bridge._eval(code)
+            data = json.loads(bridge._eval(build))
         except Exception as e:
             raise RuntimeError(f"Falha ao consultar MT5 para {symbol}: {e}")
             
@@ -350,7 +363,7 @@ class MT5Provider(DataProvider):
             return pd.DataFrame()
             
         df = pd.DataFrame(data)
-        df["datetime"] = pd.to_datetime(df["datetime"], unit="s", tz="UTC")
+        df["datetime"] = pd.to_datetime(df["datetime"], unit="s", utc=True)
         df.set_index("datetime", inplace=True)
         df.columns = ["Open", "High", "Low", "Close", "Volume"]
         return df

@@ -10,7 +10,7 @@ Uso: python3 ensure_symbols.py
 
 from mt5_bridge import MT5Bridge
 
-SYMBOLS = ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY"]
+SYMBOLS = ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "US500", "NAS100", "US30", "GER40", "IBOV"]
 
 
 def main():

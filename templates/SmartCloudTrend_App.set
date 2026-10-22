@@ -1,0 +1,61 @@
+; SmartCloudTrend_App.set
+; ----------------------------------------------------------
+; Arquivo de parâmetros para o indicador SmartCloudTrend_App.mq5
+; Uso: MT5 → Navigator → Indicators → SmartCloudTrend_App →
+;      Properties → Inputs → Load → selecione este arquivo.
+;
+; Os valores aqui DEVEM bater com o app.py (indicators.py):
+;   SMA 9/21/200, BB 20/2σ, EMA 20/50, FVG/Swings/Fibo/Sweeps,
+;   Volume Profile com bins=40 e Value Area = 70%.
+; ----------------------------------------------------------
+
+; ----- MÉDIAS (alinhadas ao app.py) -----
+SMA_Fast=9
+SMA_Mid=21
+SMA_Slow=200
+ShowSMA=true
+
+; ----- BOLLINGER BANDS -----
+ShowBB=true
+BB_Period=20
+BB_Dev=2.0
+
+; ----- SMART CLOUD (EMA 20/50) -----
+ShowCloud=true
+Cloud_Fast=20
+Cloud_Slow=50
+ShowCrossArrows=true
+
+; ----- SINAIS DO MODELO -----
+ShowModelSignals=true
+
+; ----- SMC / ICT -----
+ShowFVG=true
+ShowSwings=true
+ShowFibo=true
+ShowSweeps=true
+SMC_Lookback=150
+Swing_Window=5
+BullFVG_Color=C'38,166,154'
+BearFVG_Color=C'239,83,80'
+BSL_Color=Orange
+SSL_Color=Magenta
+Fib33_Color=LightSkyBlue
+Fib50_Color=Silver
+Fib66_Color=Gold
+
+; ----- VOLUME PROFILE -----
+ShowVolumeProfile=true
+VP_Bins=40
+VP_Lookback=200
+VP_ValueAreaPct=0.70
+VP_Up_Color=C'38,166,154'
+VP_Dn_Color=C'239,83,80'
+VP_POC_Color=Yellow
+VP_VAH_Color=DodgerBlue
+VP_VAL_Color=DodgerBlue
+
+; ----- PAINEL DE VOLUME -----
+ShowVolume=true
+Vol_Up_Color=C'38,166,154'
+Vol_Dn_Color=C'239,83,80'

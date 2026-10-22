@@ -225,12 +225,16 @@ Além dos alertas, o cron pode **executar os sinais automaticamente no MT5**
 (abre/fecha posições sem precisar do dashboard aberto):
 
 - `run_trader.sh` — verifica o sinal a cada 5 min e executa via `Mt5Broker`.
-- Agendado no crontab (`*/5 * * * *`), log em `/tmp/trader.log`.
-- Parâmetros (par/timeframe) editáveis no topo do script.
+- Agendado no crontab (`*/5 * * * *`), log em `/tmp/trader.log` (rotacionado a 2 MB).
+- `run_alerts.sh` — só notifica, não executa; usa lock próprio.
+- Limites padrão do robô: `--max-open 1`, `--max-spread-pips 25`,
+  `--min-tick-volume 1`, `--risk-pct 0.25`. Editáveis no topo do script.
 - Teste manual: `bash run_trader.sh` (ou `--force` para notificar sempre).
 
 Avisos:
-- Só executa quando há **sinal + MT5 disponível**; sinal neutro não faz nada.
+- Só executa quando há **sinal + MT5 disponível + kill-switch ligado**; sinal
+  neutro não faz nada.
+- `watchdog.py` roda a cada minuto no cron e reinicia MT5/dashboard se caírem.
 - Acompanhe o log e o terminal MT5. Remova a linha do cron para desligar o robô.
 
 ### 💸 Execução ao vivo em modo demo (paper trading)
@@ -269,6 +273,67 @@ mesma interface do `PaperBroker` (troca-se a instância no app).
 - Dimensionamento é aproximado (1 lote = 100k unidades); o risco real pode
   diferir para pares cruzados/JPY.
 - O pacote `MetaTrader5` do PyPI é **só Windows**; por isso o bridge RPyC.
+
+## 🔒 Conta real: barreiras de segurança obrigatórias
+
+O sistema roda 24/7 sozinho, então as proteções são **bloqueios**, não avisos.
+Nenhuma delas impede o robô de **fechar** uma posição — só de **abrir**.
+
+### 1. Gate de conta real (`ALLOW_LIVE_TRADING`)
+Se a conta logada for **real**, `Mt5Broker` **recusa qualquer entrada** até você
+exportar a variável. Sem isso, o robô opera normalmente em conta demo:
+
+```bash
+export ALLOW_LIVE_TRADING=1     # libera ENTRADAS em conta real
+run_trader.sh                   # precisa vir do mesmo shell/cron
+```
+
+Conta `demo` não precisa. Conta com modo **desconhecido** (MT5 não informou) é
+**tratada como real** e bloqueada.
+
+### 2. Kill-switch (parada imediata)
+```bash
+python3 safety.py status        # ver se está ligado
+python3 safety.py disable "vou revisar a estratégia"
+python3 safety.py enable
+```
+Liga/desliga o arquivo `/tmp/mercado_trader.disabled`. Enquanto ativo,
+`alerts.py` bloqueia **antes** de calcular o sinal e `on_signal` recusa entradas.
+Posições abertas continuam protegidas por SL/TP e pelo trailing.
+
+### 3. Concorrência (`flock`)
+`run_alerts.sh`, `run_trader.sh` e o dashboard disputam **um único executor**
+(`/tmp/mercado_trader.exec.lock`). Se outro processo já está rodando, este tick é
+**ignorado** — nunca há fila de ordens atrasadas nem ordem duplicada.
+
+### 4. Validação de margem e tamanho
+Antes de enviar qualquer ordem: `order_check()` (retcode 10004+), clamp dos stops
+contra `trade_stops_level`, lotes recusados quando a política de risco diz
+não (nunca "forçar" 0.01 lote) e `risk_guard` que **bloqueia quando não consegue
+ler o histórico** de deals do dia (fail-safe).
+
+### 5. Watchdog (24/7)
+```bash
+python3 watchdog.py --check     # só diagnostica
+python3 watchdog.py             # diagnostica + reinicia o que caiu + alerta no Telegram
+```
+Checa a cada minuto: porta do bridge (18812), sessão/conta logada, dashboard,
+log do cron fresco, **posições sem SL/TP** e o estado do kill-switch.
+
+### 6. Escopo: `magic` do robô
+Todas as posições são filtradas por `ROBOT_MAGIC = 20260805`. O robô **nunca**
+conta, altera ou fecha posições manuais ou de outro EA. Diagnóstico de todas:
+`bridge.positions(magic=None)`.
+
+### Checklist antes de ligar dinheiro de verdade
+1. `python3 test_realtime.py` → 14/14.
+2. `./start_mt5.sh status` → porta + conta OK, e o **modo está correto**.
+3. `export ALLOW_LIVE_TRADING=1` no ambiente do cron.
+4. `bash run_trader.sh` e ler `/tmp/trader.log` — confirme que sinal aparece
+   (não só "⚪ Neutro") e que o lock está ativo.
+5. `python3 safety.py status` → `habilitado`.
+6. Risco: `--risk-pct 0.25` (0,25% por trade) e `--max-open 1` como padrão;
+   suba só depois de ver o diário de consistência fechando no azul.
 
 ## O que foi corrigido em relação aos arquivos originais
 

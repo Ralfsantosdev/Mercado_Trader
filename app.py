@@ -18,6 +18,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import os as _os
+import numpy as np
 
 from data_provider import get_provider
 from indicators import add_all_indicators
@@ -27,10 +28,12 @@ from model import (
     volume_is_meaningful,
     train_ml_model,
     predict_latest,
+    _is_in_session,
+    signal_index,
 )
 from backtest import run_backtest, summarize
 from executor import PaperBroker
-from dashboard_ui import inject_css, header
+from dashboard_ui import inject_css, header, trade_table_html
 
 st.set_page_config(page_title="Forex Dashboard", page_icon="📈", layout="wide")
 
@@ -100,21 +103,21 @@ st.sidebar.caption("Parâmetros do terminal")
 
 source = st.sidebar.selectbox(
     "Fonte de dados",
-    ["awesomeapi", "yfinance"],
-    index=0,
-    help="awesomeapi: cotação e histórico em tempo real com a chave do "
-         "https://awesomeapi.com.br (sem cache). yfinance: Yahoo Finance (cache de 1h).",
+    ["awesomeapi", "mt5", "yfinance"],
+    index=1,
+    help="awesomeapi: cotação tempo real. mt5: puxa do MetaTrader 5 via mt5server.exe. yfinance: Yahoo Finance.",
 )
 
 _awesome_symbols = [
     "XAU-USD", "EUR-USD", "GBP-USD", "USD-JPY", "AUD-USD", "USD-CAD", "NZD-USD", "USD-CHF",
     "EUR-GBP", "EUR-JPY", "USD-BRL", "EUR-BRL", "BTC-BRL", "ETH-BRL", "DOGE-BRL",
+    "US500", "NAS100", "US30", "GER40", "IBOV",
 ]
 _yfinance_symbols = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X"]
 
 symbol = st.sidebar.selectbox(
     "Par de moedas",
-    _awesome_symbols if source == "awesomeapi" else _yfinance_symbols,
+    _awesome_symbols if source in ("awesomeapi", "mt5") else _yfinance_symbols,
     format_func=lambda x: x.replace("=X", ""),
 )
 
@@ -131,6 +134,9 @@ interval = st.sidebar.selectbox(
 if source == "awesomeapi":
     # intraday: montado de ticks de 1 min via paginação (~30 dias); diário: até 360 dias
     _max_days = {"1m": 1, "2m": 2, "5m": 30, "15m": 30, "30m": 30, "1h": 30, "1d": 360}[interval]
+elif source == "mt5":
+    # MT5 history is typically extensive depending on broker
+    _max_days = {"1m": 30, "2m": 30, "5m": 90, "15m": 90, "30m": 90, "1h": 365, "1d": 1000}[interval]
 else:
     _max_days = {"1m": 7, "2m": 14, "5m": 60, "15m": 60, "30m": 45, "1h": 365, "1d": 365}[interval]
 
@@ -138,32 +144,38 @@ else:
 _max_days = max(2, _max_days)
 days = st.sidebar.slider("Período (dias de histórico)", 1, _max_days, min(30, _max_days))
 
-st.sidebar.subheader("🎯 Sinal por regras")
-rsi_ob = st.sidebar.slider("RSI sobrecompra (limite de compra)", 60, 95, 70)
-rsi_os = st.sidebar.slider("RSI sobrevenda (limite de venda)", 5, 40, 30)
-use_cross = st.sidebar.checkbox("Gatilho por cruzamento MM9×MM21", value=True,
-                                help="Desmarque para usar nível (MM9 acima/abaixo da MM21) em vez de cruzamento.")
+st.sidebar.subheader("🎯 Estratégia Principal")
 trigger_mode = st.sidebar.selectbox(
-    "Gatilho do sinal",
-    ["auto", "slope", "cross", "pullback", "3_9_20", "fimathe_tokio"],
-    index=4,
-    help="auto = comportamento antigo. pullback = espera o preço voltar à EMA. "
-         "3_9_20 = Cruz. de 3 com 9 e 20 inclinada. "
-         "fimathe_tokio = Técnica Fimathe (Rompimento CR na Abertura)."
+    "Filosofia de Operação (Gatilho)",
+    ["pullback_liquidity", "fimathe_tokio", "3_9_20", "cross", "pullback", "auto"],
+    index=0,
+    help="pullback_liquidity = (Recomendado) Sweep SMC + rejeição. "
+         "fimathe_tokio = Rompimento Tóquio. "
+         "Outros = Legado."
 )
-pullback_ema = st.sidebar.slider("EMA do pullback", 13, 100, 50, step=1,
-                                 help="Só usado quando gatilho = pullback.")
 
-st.sidebar.subheader("⛩️ Configurações Fimathe")
-fimathe_hour = st.sidebar.number_input("Hora de abertura (0-23)", 0, 23, 20, 
-                                       help="Hora em que o mercado 'abre' para traçar o canal (ex: 20 para Tóquio, 8 para Londres).")
-fimathe_candles = st.sidebar.number_input("Duração (número de candles)", 1, 20, 4,
-                                          help="Quantos candles definem o Canal de Referência (CR). Ex: 4 candles no 5m = 20 minutos.")
-fimathe_max_pips = st.sidebar.number_input("Max Tamanho (pips)", 10, 2000, 30,
-                                           help="Se o CR ultrapassar isso, ele será cortado ao meio (fatiado) para diminuir o SL.")
+# Valores padrão invisíveis para manter compatibilidade
+rsi_ob, rsi_os, use_cross = 70, 30, False
+pullback_ema = 50
+fimathe_hour, fimathe_candles, fimathe_max_pips = 20, 4, 30
 
-use_volume = st.sidebar.checkbox("Confirmar com volume", value=True,
-                                 help="Se o volume não existir na fonte (Yahoo forex), a confirmação usa ATR em alta.")
+if trigger_mode in ["auto", "slope", "cross"]:
+    st.sidebar.caption("Parâmetros de Cruzamento / RSI")
+    rsi_ob = st.sidebar.slider("RSI sobrecompra (limite)", 60, 95, 70)
+    rsi_os = st.sidebar.slider("RSI sobrevenda (limite)", 5, 40, 30)
+    use_cross = st.sidebar.checkbox("Gatilho por cruz. MM9×MM21", value=True)
+elif trigger_mode == "pullback":
+    st.sidebar.caption("Parâmetros de Pullback")
+    pullback_ema = st.sidebar.slider("EMA do pullback", 13, 100, 50, step=1)
+elif trigger_mode == "fimathe_tokio":
+    st.sidebar.caption("⛩️ Parâmetros Fimathe")
+    fimathe_hour = st.sidebar.number_input("Hora de abertura (0-23)", 0, 23, 20)
+    fimathe_candles = st.sidebar.number_input("Duração (candles)", 1, 20, 4)
+    fimathe_max_pips = st.sidebar.number_input("Max Tamanho (pips)", 10, 2000, 30)
+elif trigger_mode == "pullback_liquidity":
+    st.sidebar.caption("🧲 Institucional (SMC) ativo. Gatilhos fixos e matemáticos baseados em liquidez.")
+
+use_volume = st.sidebar.checkbox("Confirmar com volume", value=True, help="Usa ATR se não houver volume.")
 
 st.sidebar.subheader("🌍 Condição de mercado (filtros)")
 _session_names = ["", "Sessão de Tóquio", "Sessão de Londres", "Sessão de Nova York",
@@ -180,10 +192,34 @@ min_adx = st.sidebar.slider("ADX mínimo (força da tendência)", 0, 50, 20, ste
                             help="0 = desligado. ADX > 20-25 indica tendência aproveitável; "
                                  "abaixo disso o mercado está lateral (range) e o sinal é ignorado.")
 
+st.sidebar.subheader("🌋 Volatilidade (regime + stop adaptativo)")
+vol_max_pct = st.sidebar.number_input(
+    "Bloquear vol extrema (percentil)", min_value=50, max_value=100, value=90, step=5,
+    help="Percentil rolante da volatilidade precisa (Parkinson/Garman-Klass/Yang-Zhang) "
+         "na própria história do ativo. Acima disso = rajada/notícia: whipsaw, o stop morre "
+         "antes do preço ir pro alvo. 100 = desligado. Funciona em qualquer par/timeframe "
+         "sem calibrar (é relativo, não fixo em pips).")
+vol_adaptive_stop = st.sidebar.checkbox(
+    "Stop adaptativo à volatilidade", value=True,
+    help="Multiplica SL/TP pelo regime: percentil ≤50 = ×1.0 (nada muda), até ×1.6 em P100. "
+         "Só ALARGA o stop em rajada — nunca aperta.")
+vol_er_gate = st.sidebar.checkbox(
+    "Bloquear lateral pura (chop)", value=True,
+    help="Efficiency Ratio de Kaufman < 0.15 = mercado sem direção (varre os dois lados). "
+         "Nesse regime stop é atingido por ruído, não por estrutura.")
+
 st.sidebar.subheader("💰 Backtest")
 _is_gold = symbol.startswith("XAU")
-_pip_size = 0.01 if _is_gold else 0.0001
-_default_spread = 25.0 if _is_gold else 2.0
+_is_index = symbol in ("US500", "NAS100", "US30", "GER40", "IBOV")
+if _is_gold:
+    _pip_size = 0.01
+    _default_spread = 25.0
+elif _is_index:
+    _pip_size = 1.0  # Índices: 1 ponto = 1 unidade
+    _default_spread = 5.0
+else:
+    _pip_size = 0.0001
+    _default_spread = 2.0
 spread_pips = st.sidebar.number_input("Spread (pips)", min_value=0.0, max_value=50.0, value=_default_spread, step=0.5,
                                       help=f"Custo por operação (ida+volta). {symbol}: 1 pip = {_pip_size}. "
                                            "Sem ele o backtest mente.")
@@ -211,15 +247,34 @@ risk_pct = st.sidebar.number_input("Risco por trade (%)", min_value=0.1, max_val
                                         "0,25% é conservador; 1% em forex com spread já é agressivo.")
 
 st.sidebar.subheader("🤖 Análise de probabilidade e risco (IA)")
+llm_enabled = st.sidebar.checkbox(
+    "Ligar agente LLM (gasta tokens)",
+    value=False,
+    help="Habilita a Inteligência Artificial gerativa avançada. Requer chave de API e consome tokens."
+)
+llm_provider = st.sidebar.selectbox("Provedor LLM", ["gemini", "openai"], index=0)
+llm_api_key = st.sidebar.text_input(
+    f"Chave da API ({llm_provider.capitalize()})",
+    type="password",
+    help="Opcional se definida no secrets.toml."
+)
+_secret_key = get_secret(f"{llm_provider.upper()}_API_KEY") or get_secret("llm_api_key")
+if llm_enabled and not llm_api_key and not _secret_key:
+    st.sidebar.warning(f"⚠️ Insira a chave da API para usar o {llm_provider.capitalize()} ou defina no secrets.toml.")
+
+llm_config = None
+if llm_enabled:
+    llm_config = {"api_key": llm_api_key or _secret_key, "provider": llm_provider}
+
 ai_enabled = st.sidebar.checkbox(
-    "Ativar análise de probabilidade e risco (IA)",
+    "Ativar estatística local (Monte Carlo/IA Preditiva)",
     value=False,
     help="Estatística local (Monte Carlo, VaR, P(TP/SL)) — somente offline, "
          "sem chamadas de API e sem custo de tokens.",
 )
 use_dynamic_risk = st.sidebar.checkbox(
     "Gestão de Risco Dinâmica (Kelly Fracionado via IA)",
-    value=False,
+    value=True,
     help="Ajusta o % de risco de cada trade com base na 'Margem de Confiança' do "
          "modelo de Machine Learning. Oportunidades claras recebem mais lote."
 )
@@ -255,13 +310,16 @@ if st.sidebar.button("🗑️ Zerar conta"):
 st.sidebar.subheader("🛡️ Confirmação ao vivo (MT5)")
 mt5_filter = st.sidebar.checkbox(
     "Confirmar com spread/tick ao vivo",
-    value=False,
+    value=True,
     help="Usa o que o terminal MT5 oferece de verdade: bloqueia a entrada quando o "
          "spread real (ask-bid) estiver alto ou o volume de tick for baixo. "
          "Requer mt5server.exe rodando. Sem ele, o filtro fica desligado.",
 )
-max_spread = st.sidebar.number_input("Spread máximo ao vivo (pips)", min_value=0.5, max_value=100.0,
-                                     value=5.0, step=0.5,
+# 1 pip do ouro = 0.01; o default de forex (5p = 0.05) bloqueava Toda entrada
+# em XAU-USD porque o spread real é ~0.23 (= 23p). 60p = 0.60 de teto.
+_default_max_spread = 60.0 if _is_gold else 5.0
+max_spread = st.sidebar.number_input("Spread máximo ao vivo (pips)", min_value=0.5, max_value=500.0,
+                                     value=_default_max_spread, step=0.5,
                                      help="Acima disso a entrada é bloqueada (economia paga o stop, "
                                           "ex.: em horário de notícia). 0 desliga o spread.")
 min_tick_vol = st.sidebar.number_input("Volume de tick mínimo", min_value=0, max_value=1000,
@@ -269,9 +327,10 @@ min_tick_vol = st.sidebar.number_input("Volume de tick mínimo", min_value=0, ma
                                        help="Entradas são bloqueadas quando o candle atual tem menos "
                                             "que isso de volume de tick real. 0 desliga.")
 
-smc_alerts_enabled = st.sidebar.checkbox("🧲 Alertas SMC (Poços de Liquidez)", value=True,
-                                         help="Alerta e exibe no gráfico quando o preço entra em um Fair Value Gap (FVG), "
-                                              "mesmo sem sinal de entrada formal.")
+if trigger_mode == "pullback_liquidity":
+    smc_alerts_enabled = True
+else:
+    smc_alerts_enabled = st.sidebar.checkbox("🧲 Mostrar zonas SMC (FVG/Liquidez)", value=False)
 
 st.sidebar.subheader("🚀 Robô Autônomo (Background)")
 st.sidebar.caption("Inicia a execução institucional em 2º plano. Ele usa os parâmetros exatos definidos acima.")
@@ -312,10 +371,20 @@ else:
             "--trigger-mode", trigger_mode, "--pullback-ema", str(pullback_ema),
             "--min-adx", str(min_adx), "--sl-atr", str(sl_atr), "--tp-atr", str(tp_atr),
             "--risk-pct", str(risk_pct), "--pip-size", str(_pip_size),
+            "--vol-max-pct", str(vol_max_pct),
+            "--vol-er-min", "0.15" if vol_er_gate else "0",
             "--fimathe-hour", str(int(fimathe_hour)), "--fimathe-candles", str(int(fimathe_candles)),
             "--fimathe-max-pips", str(fimathe_max_pips),
-            "--source", source, "--continuous"
+            "--source", source, "--continuous",
+            "--session", session,
+            "--max-open", str(int(max_open_positions)),
+            "--max-spread-pips", str(max_spread),
+            "--min-tick-volume", str(min_tick_vol),
+            "--tp-pips", str(tp_pips),
+            "--trailing-stop-pips", str(trailing_stop_pips),
         ]
+        if not vol_adaptive_stop:
+            cmd.append("--no-vol-adaptive")
         if not use_cross:
             cmd.append("--no-cross")
         if not use_volume:
@@ -346,8 +415,8 @@ if st.sidebar.button("📤 Enviar alerta de teste"):
 if not alerts_mod.configured():
     st.sidebar.caption("⚠️ Sem credenciais do Telegram. Veja README.")
 
-_refresh_opts = {"30s": 30, "1min": 60, "2min": 120, "5min": 300}
-refresh_label = st.sidebar.selectbox("Atualizar automaticamente", list(_refresh_opts.keys()), index=0)
+_refresh_opts = {"1s": 1, "5s": 5, "10s": 10, "30s": 30, "1min": 60, "2min": 120, "5min": 300}
+refresh_label = st.sidebar.selectbox("Atualizar automaticamente", list(_refresh_opts.keys()), index=2)
 auto_refresh = st.sidebar.checkbox(f"Ativado (a cada {refresh_label})", value=True)
 
 if st.sidebar.button("🔄 Atualizar dados agora"):
@@ -355,6 +424,16 @@ if st.sidebar.button("🔄 Atualizar dados agora"):
 
 st.sidebar.subheader("🎨 Visual do Gráfico")
 chart_type = st.sidebar.radio("Tipo de Gráfico", ["Candles", "Barras (OHLC)"], index=0, horizontal=True)
+show_smart_cloud = st.sidebar.checkbox("☁️ SmartCloudTrend (EMA 20x50)", value=False)
+show_market_state = st.sidebar.checkbox("🎯 Estado do Mercado (Equilíbrio/Desequilíbrio)", value=True,
+                                         help="Mostra fundo colorido: verde=equilíbrio, vermelho=desequilíbrio, amarelo=transição")
+
+if trigger_mode in ["auto", "cross", "slope"]:
+    show_bb = st.sidebar.checkbox("📉 Bandas de Bollinger", value=True)
+else:
+    show_bb = False
+
+vol_profile_on = st.sidebar.checkbox("📊 Perfil de Volume (Profit Pro)", value=(trigger_mode == "pullback_liquidity"))
 
 st.sidebar.caption(
     "Fonte: **AwesomeAPI** em tempo real (chave em `.streamlit/secrets.toml`) "
@@ -364,10 +443,10 @@ st.sidebar.caption(
 
 # ---------------------------------------------------------------------------
 # Pipeline de dados (cacheado) e ML (cacheado) — definidos fora do fragment
-# ---------------------------------------------------------------------------
-@st.cache_data(ttl=60, show_spinner=False)
+# Removido cache duplo aqui para permitir MT5 em tempo real (AwesomeAPI já tem cache interno)
 def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, trigger_mode, pullback_ema,
-                     session, min_adx, max_spread_pips, min_tick_volume, fimathe_hour, fimathe_candles, fimathe_max_pips):
+                     session, min_adx, max_spread_pips, min_tick_volume, fimathe_hour, fimathe_candles, fimathe_max_pips,
+                     vol_max_pct=90, vol_er_gate=True):
     import streamlit as st
     api_key = get_secret("awesomeapi_key") if source == "awesomeapi" else None
     provider = get_provider(source=source, api_key=api_key)
@@ -384,6 +463,7 @@ def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, 
     df["Return"] = df["Close"].pct_change()
     df["Direction"] = (df["Return"].shift(-1) > 0).astype(int)
     df = add_all_indicators(df)
+    _er_min = 0.15 if vol_er_gate else 0.0
     df = generate_rule_based_signals(
         df,
         rsi_overbought=rsi_ob,
@@ -398,6 +478,13 @@ def load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, 
         fimathe_hour=fimathe_hour,
         fimathe_candles=fimathe_candles,
         fimathe_max_pips=fimathe_max_pips,
+        max_vol_percentile=float(vol_max_pct),
+        min_efficiency_ratio=_er_min,
+        pls_config_kwargs={
+            "max_vol_percentile": float(vol_max_pct),
+            "min_efficiency_ratio": _er_min,
+            "adaptive_stop": bool(vol_adaptive_stop),
+        },
     )
     return df
 
@@ -412,12 +499,12 @@ def train_cached(df):
 
 @st.cache_data(ttl=60, show_spinner="Simulando Monte Carlo...")
 def ai_analysis_cached(df, direction, sl_atr, tp_atr, spread_pips, pip_size,
-                       ml_p, ml_pred, horizon, n_paths):
+                       ml_p, ml_pred, horizon, n_paths, llm_config=None):
     import ai_analysis
     return ai_analysis.run_analysis(
         df, direction, sl_atr=sl_atr, tp_atr=tp_atr, spread_pips=spread_pips,
         pip_size=pip_size, ml_p=ml_p, ml_pred=ml_pred,
-        horizon=horizon, n_paths=n_paths, llm_config=None,
+        horizon=horizon, n_paths=n_paths, llm_config=llm_config,
     )
 
 
@@ -439,10 +526,10 @@ def _mt5_live_quote(symbol):
 
 
 def render_main():
-    with st.spinner("Buscando dados..."):
-        df = load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, trigger_mode, pullback_ema,
-                              session, min_adx, float(spread_pips * 2), 5,
-                              int(fimathe_hour), int(fimathe_candles), float(fimathe_max_pips))
+    df = load_and_prepare(source, symbol, days, interval, rsi_ob, rsi_os, use_cross, trigger_mode, pullback_ema,
+                          session, min_adx, float(spread_pips * 2), 5,
+                          int(fimathe_hour), int(fimathe_candles), float(fimathe_max_pips),
+                          vol_max_pct=int(vol_max_pct), vol_er_gate=bool(vol_er_gate))
 
     if df.empty:
         _prev_err = st.session_state.get("_data_error", "")
@@ -465,9 +552,11 @@ def render_main():
     header("📈 Forex Dashboard", "Análise técnica · Machine Learning · Backtest · Execução")
 
     # -------------------------------------- Confirmação ao vivo (spread/tick MT5)
+    # Um único quote do MT5 por re-render — reutilizado no filtro, na cotação
+    # ao vivo e no candle em formação do gráfico (update a cada 1s).
+    live_q = _mt5_live_quote(symbol)
     mt5_block_msg = ""
     if mt5_filter:
-        live_q = _mt5_live_quote(symbol)
         if live_q:
             df = apply_live_confirmation(
                 df, live_q,
@@ -481,8 +570,248 @@ def render_main():
         else:
             st.caption("⚠️ Filtro MT5 pedido, mas o bridge não está rodando — confirmação ao vivo desligada.")
 
+    # Bloqueio por regime de volatilidade (percentil extremo / chop)
+    _vol_block_msg = df.attrs.get("vol_block_msg", "") or ""
+    if _vol_block_msg:
+        st.warning(f"🌋 Entrada bloqueada pela volatilidade: {_vol_block_msg}")
+
     # ------------------------------------------------------------ Cotação ao vivo
-    if source == "awesomeapi":
+    if source == "mt5":
+        # MT5 ao vivo: bid/ask direto do terminal (broker), sem AwesomeAPI
+        try:
+            from dashboard_ui import quote_card
+            if live_q is None or not live_q.get("bid"):
+                st.caption("⚠️ Cotação ao vivo do MT5 indisponível — confira se o mt5server.exe está rodando.")
+            else:
+                bid = float(live_q["bid"])
+                ask = float(live_q["ask"])
+                spread = float(live_q.get("spread", 0.0))
+                digits = int(live_q.get("digits", 0) or 0)
+                spread_fmt = f"{spread:.{digits}f}" if spread > 0 else "—"
+                cards = "".join([
+                    quote_card("BID (compra)", _fmt_price(bid)),
+                    quote_card("ASK (venda)", _fmt_price(ask)),
+                    quote_card("SPREAD", spread_fmt),
+                    quote_card("TICKS", f"{int(live_q.get('tick_volume', 0))}"),
+                ])
+                st.markdown(f"<div class='quote-strip'>{cards}</div>", unsafe_allow_html=True)
+                st.caption(f"🔴 Fonte: **MetaTrader 5** ao vivo — {live_q['symbol']} (digits {digits}).")
+        except Exception as e:
+            st.caption(f"⚠️ Não foi possível obter a cotação ao vivo: {e}")
+
+        # ------------------------- Candle em formação + decisão (manual, sem execução)
+        if len(df):
+            try:
+                from dashboard_ui import quote_card
+                last = df.iloc[-1]
+                o = float(last["Open"]); h = float(last["High"])
+                l = float(last["Low"]); c = float(last["Close"])
+                body_pct = (c - o) / o * 100 if o else 0.0
+                bar_start = last.name
+                total = {"1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800,
+                         "1h": 3600, "1d": 86400}.get(interval, 300)
+                # os candles do MT5 vêm no horário do SERVIDOR da corretora (ex.: UTC+2).
+                # O progresso usa o horário do último tick (também do servidor) p/ ficar
+                # consistente — sem chutar fuso.
+                server_now = None
+                if live_q and live_q.get("time"):
+                    server_now = pd.Timestamp(int(live_q["time"]), unit="s", tz="UTC")
+                if server_now is not None:
+                    elapsed = max(0.0, (server_now - bar_start).total_seconds())
+                    frac = min(elapsed / total, 1.0)
+                    rem = max(0, int(total - elapsed))
+                else:
+                    frac = None
+                    rem = None
+
+                status = "—"
+                live_spread_pips = 0.0
+                if live_q and live_q.get("bid"):
+                    live_spread_pips = float(live_q.get("spread") or 0.0) / _pip_size if _pip_size else 0.0
+                    probe = apply_live_confirmation(
+                        df.iloc[[-1]].copy(), live_q,
+                        max_spread_pips=float(max_spread),
+                        min_tick_volume=float(min_tick_vol),
+                        pip_size=_pip_size,
+                    )
+                    block = probe.attrs.get("signal_block_msg", "") or ""
+                    status = "🟢 ok p/ entrar" if not block else f"⛔ {block}"
+
+                sig = int(df["Signal"].iloc[signal_index(df, trigger_mode)])
+                sig_icon = {1: "🟢", -1: "🔴", 0: "⚪"}[sig]
+                sig_lab = {1: "COMPRA", -1: "VENDA", 0: "NEUTRO"}[sig]
+                sess_ok = True
+                if server_now is not None:
+                    sess_ok = bool(_is_in_session(pd.DatetimeIndex([server_now]), session).iloc[0])
+
+                candle_cards = "".join([
+                    quote_card("CANDLE O", _fmt_price(o)),
+                    quote_card("CANDLE H", _fmt_price(h)),
+                    quote_card("CANDLE L", _fmt_price(l)),
+                    quote_card("CANDLE C", _fmt_price(c),
+                               f"{body_pct:+.3f}%", 1 if body_pct > 0 else (-1 if body_pct < 0 else 0)),
+                ])
+                st.markdown(f"<div class='quote-strip'>{candle_cards}</div>", unsafe_allow_html=True)
+                if frac is not None:
+                    st.progress(frac)
+                st.caption(
+                    f"🕯️ Candle {interval} em formação"
+                    + (f" — {frac * 100:.0f}% decorrido ({rem // 60}m {rem % 60:02d}s restantes)"
+                       if frac is not None else " (progresso indisponível)")
+                    + f" · abre {bar_start.strftime('%H:%M')} (hora do servidor)"
+                )
+                st.markdown(
+                    f"**🎯 Decisão:** sinal **{sig_icon} {sig_lab}** · spread **{live_spread_pips:.2f}p** · "
+                    f"confirmação ao vivo: **{status}** · sessão `{session}`: "
+                    f"{'✅ dentro' if sess_ok else '⏳ fora'} do horário."
+                )
+
+                # -------- Poços de liquidez: distância ao vivo + sweep recente --------
+                try:
+                    from indicators import swing_distance, find_sweeps
+                    _dist = swing_distance(df, c, pip_size=_pip_size)
+                    _liq = []
+                    if _dist.get("bsl_pips") is not None:
+                        _liq.append(f"BSL acima a **+{_dist['bsl_pips']:.1f}p**")
+                    if _dist.get("ssl_pips") is not None:
+                        _liq.append(f"SSL abaixo a **-{_dist['ssl_pips']:.1f}p**")
+                    _liq_txt = " · ".join(_liq) if _liq else "sem liquidez ativa nos últimos 150 candles"
+                    st.markdown(f"🕳️ **Liquidez (SMC):** {_liq_txt}")
+
+                    from indicators import get_current_wave
+                    _w = get_current_wave(df)
+                    if _w:
+                        st.markdown(f"🌊 **Onda Atual ({_w['direction']}):** Início {_fmt_price(_w['origin'])} ➔ Extremo {_fmt_price(_w['extreme'])} (Onda: {_w['total_pct']:.2f}% | Hoje: {_w['day_pct']:+.2f}%)")
+                        st.markdown(f"📐 **Retração (Correção):** 33% (1/3) em **{_fmt_price(_w['level_33'])}** | 50% em **{_fmt_price(_w['level_50'])}** | 66% (2/3) em **{_fmt_price(_w['level_66'])}**")
+
+                    _sweeps = find_sweeps(df)
+                    if _sweeps:
+                        for _ev in _sweeps:
+                            _lab = "🕳️ **BSL varrido**" if _ev["type"] == "BSL" else "🕳️ **SSL varrida**"
+                            _side = "compras acima" if _ev["type"] == "BSL" else "vendas abaixo"
+                            st.markdown(
+                                f"{_lab} @ {_ev['price']:.5f} no candle "
+                                f"{_ev['time'].strftime('%H:%M')} — pavio atravessou e fechou de volta. "
+                                f"Possível spring (fakeout) buscando {_side}."
+                            )
+                except Exception as e:
+                    st.caption(f"⚠️ Análise de liquidez indisponível: {e}")
+
+                # -------- Score de confluência (0-8) para entrada manual --------
+                try:
+                    from indicators import confirmation_score
+                    if sig == 0:
+                        st.markdown("📋 **Sem sinal ativo no momento** — aguardando gatilho para calcular o score.")
+                    else:
+                        _score, _checks = confirmation_score(
+                            df, sig, live_q=live_q,
+                            max_spread_pips=float(max_spread),
+                            pip_size=_pip_size,
+                        )
+                        _lab = "COMPRA" if sig == 1 else "VENDA"
+                        _icon = "🟢" if sig == 1 else "🔴"
+                        if _score >= 8:
+                            _verdict = "✅ **confluência forte** — entrada com alta probabilidade"
+                        elif _score >= 5:
+                            _verdict = "⚠️ **confluência parcial** — espere mais uma confirmação"
+                        else:
+                            _verdict = "⛔ **sem confluência** — não é boa entrada"
+                        st.markdown(f"📋 **Score de confirmação: {_score}/{len(_checks)}** ({_icon} {_lab}) — {_verdict}")
+                        for _chk in _checks:
+                            _mark = "✅" if _chk["ok"] else "❌"
+                            _det = f" ({_chk['detail']})" if _chk["detail"] else ""
+                            st.markdown(f"&nbsp;&nbsp;&nbsp;{_mark} {_chk['name']}{_det}")
+                except Exception as e:
+                    st.caption(f"⚠️ Score de confirmação indisponível: {e}")
+
+                # -------- Clarezas: Status do fluxo institucional --------
+                try:
+                    _last = df.iloc[-1]
+                    _clarezas_items = []
+                    if "Clarezas_BuyFlow" in df.columns and _last.get("Clarezas_BuyFlow"):
+                        _clarezas_items.append("🟢 **Fluxo de compra forte**")
+                    if "Clarezas_SellFlow" in df.columns and _last.get("Clarezas_SellFlow"):
+                        _clarezas_items.append("🔴 **Fluxo de venda forte**")
+                    if "Clarezas_Absorption" in df.columns and _last.get("Clarezas_Absorption"):
+                        _clarezas_items.append("🔵 **Absorção detectada** (indecisão institucional)")
+                    if "Clarezas_ContinuationBuy" in df.columns and _last.get("Clarezas_ContinuationBuy"):
+                        _clarezas_items.append("🟢 **Continuação de alta** (fluxo+pullback+rompimento)")
+                    if "Clarezas_ContinuationSell" in df.columns and _last.get("Clarezas_ContinuationSell"):
+                        _clarezas_items.append("🔴 **Continuação de baixa** (fluxo+pullback+rompimento)")
+                    if _clarezas_items:
+                        st.markdown("📊 **Clarezas:** " + " · ".join(_clarezas_items))
+                except Exception:
+                    pass
+
+                # ── Motivo do sinal + R:R ──────────────────────────────────
+                try:
+                    _reason = df.attrs.get("signal_reason", "")
+                    _rr = df.attrs.get("signal_rr")
+                    _entry = df.attrs.get("signal_entry")
+                    _sl = df.attrs.get("signal_sl")
+                    _tp = df.attrs.get("signal_tp")
+
+                    if sig != 0 and _reason:
+                        st.markdown(
+                            f"<div class='signal-new'>"
+                            f"🔍 <b>Motivo do sinal:</b> {_reason}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    if sig != 0 and _rr is not None:
+                        _rr_icon = "✅" if _rr >= 2 else ("⚠️" if _rr >= 1.5 else "⛔")
+                        st.markdown(
+                            f"<div class='signal-new'>"
+                            f"📐 <b>Risco/Retorno:</b> {_rr_icon} <b>{_rr:.1f}R</b> "
+                            f"(entrada {_fmt_price(_entry)} · SL {_fmt_price(_sl)} · TP {_fmt_price(_tp)})"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                except Exception:
+                    pass
+
+                # ── Painel de decisão rápida ────────────────────────────────
+                if sig != 0:
+                    _entry = df.attrs.get("signal_entry")
+                    _sl = df.attrs.get("signal_sl")
+                    _tp = df.attrs.get("signal_tp")
+                    _rr = df.attrs.get("signal_rr")
+                    _icon = "🟢" if sig == 1 else "🔴"
+                    _lab = "COMPRA" if sig == 1 else "VENDA"
+
+                    # Veredito baseado em R:R + score
+                    _score_val = 0
+                    try:
+                        if sig != 0:
+                            _score_val, _ = confirmation_score(df, sig, live_q=live_q,
+                                                                max_spread_pips=float(max_spread),
+                                                                pip_size=_pip_size)
+                    except Exception:
+                        pass
+
+                    if _rr is not None and _rr >= 2 and _score_val >= 6:
+                        _verdict = "✅ **ENTRAR** — confluência forte + R:R ≥ 2.0"
+                        _panel_cls = "decision-enter"
+                    elif _rr is not None and _rr >= 2 and _score_val >= 4:
+                        _verdict = "⚠️ **AVALIAR** — R:R ok (≥2.0), mas confirmação parcial"
+                        _panel_cls = "decision-evaluate"
+                    else:
+                        if _rr is not None and _rr < 2:
+                            _verdict = f"⛔ **NÃO ENTRAR** — R:R ruim ({_rr:.1f}). Mínimo exigido: 2.0"
+                        else:
+                            _verdict = "⛔ **NÃO ENTRAR** — Falta de confluência"
+                        _panel_cls = "decision-block"
+
+                    st.markdown(
+                        f"<div class='decision-panel {_panel_cls}'>"
+                        f"<div class='d-title'>{_icon} DECISÃO: {_lab}</div>"
+                        f"<div class='d-sub'>{_verdict}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+            except Exception as e:
+                st.caption(f"⚠️ Candle em formação indisponível: {e}")
+    elif source == "awesomeapi":
         try:
             from dashboard_ui import quote_card
             api_key = get_secret("awesomeapi_key")
@@ -523,7 +852,7 @@ def render_main():
     last_close = df["Close"].iloc[-1]
     last_return = df["Return"].iloc[-1] if pd.notna(df["Return"].iloc[-1]) else 0.0
     last_rsi = df["RSI"].iloc[-1]
-    last_signal = df["Signal"].iloc[-1]
+    last_signal = df["Signal"].iloc[signal_index(df, trigger_mode)]
 
     with col1:
         st.metric("Último preço", _fmt_price(last_close), f"{last_return * 100:.2f}%")
@@ -538,6 +867,41 @@ def render_main():
 
     with col4:
         st.metric("Candles analisados", len(df))
+
+    # Métrica do Estado do Mercado
+    if "Market_Zone" in df.columns:
+        current_zone = df["Market_Zone"].iloc[-1]
+        zone_emoji = "⚖️" if current_zone == "EQUILIBRIO" else "🚀" if current_zone == "DESEQUILIBRIO" else "⚡"
+        zone_label = "EQUILÍBRIO (lateral)" if current_zone == "EQUILIBRIO" else "DESEquilíbrio (tendência)" if current_zone == "DESEquilIBRIO" else "TRANSIÇÃO"
+        st.metric(f"{zone_emoji} Estado do Mercado", current_zone, zone_label)
+
+    # ------------------------------------------------- Volatilidade precisa
+    if "Vol_Percentile" in df.columns:
+        try:
+            from volatility import vol_summary as _vol_summary
+            _vs = _vol_summary(df)
+            vc1, vc2, vc3 = st.columns(3)
+            _emojis = {"EXTREMA": "🌋", "ALTA": "📈", "NORMAL": "⚖️", "BAIXA": "😴"}
+            with vc1:
+                _vpct = _vs["vol_pct"]
+                st.metric(
+                    "Volatilidade precisa",
+                    f"{_vpct:.3f}%/candle" if _vpct is not None else "—",
+                    f"{_emojis.get(_vs['regime'], '⚖️')} regime {_vs['regime'] or '—'}",
+                )
+            with vc2:
+                _pct = _vs["percentile"]
+                _pct_delta = "⛔ bloqueado" if (_pct is not None and _pct > vol_max_pct) else (
+                    f"stop ×{_vs['stop_mult']:.2f}" if _vs["stop_mult"] > 1.0 else "stop ×1.00")
+                st.metric("Percentil de vol (histórico)",
+                          f"{_pct:.0f}" if _pct is not None else "—", _pct_delta)
+            with vc3:
+                _er = _vs["efficiency"]
+                _er_delta = "⛔ lateral (chop)" if (_er is not None and _er < 0.15 and vol_er_gate) else (
+                    "direção" if _er is not None else "—")
+                st.metric("Eficiência (ER)", f"{_er:.2f}" if _er is not None else "—", _er_delta)
+        except Exception:
+            pass
 
     # ======================================================================
     # ABAS — separa os blocos para leitura rápida
@@ -561,6 +925,13 @@ def render_main():
                                          "Mude o slider para ver mais/fazer zoom.")
         df_plot = df.iloc[-n_plot:]
 
+        # Candle em formação atualizado com o tick ao vivo do MT5 (se o bridge
+        # estiver rodando) — faz o gráfico "respirar" a cada refresh sem gastar
+        # a cota da API. Indicadores/sinais continuam os do último candle fechado.
+        if live_q and live_q.get("bid"):
+            from model import apply_live_candle
+            df_plot = apply_live_candle(df_plot, live_q)
+
         fig = go.Figure()
         
         if chart_type == "Barras (OHLC)":
@@ -578,19 +949,130 @@ def render_main():
                 increasing_fillcolor="#26A69A", decreasing_fillcolor="#EF5350",
                 line=dict(width=1), whiskerwidth=0.4,
             ))
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_9"], name="MM 9",
-                                 line=dict(color="#42A5F5", width=1)))
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_21"], name="MM 21",
-                                 line=dict(color="#FFA726", width=1)))
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_200"], name="MM 200",
-                                 line=dict(color="#AB47BC", width=1.5)))
+        if trigger_mode in ["auto", "cross", "slope", "3_9_20"]:
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_9"], name="MM 9",
+                                     line=dict(color="#42A5F5", width=1)))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_21"], name="MM 21",
+                                     line=dict(color="#FFA726", width=1)))
+        
+        if trigger_mode != "fimathe_tokio":
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_200"], name="MM 200",
+                                     line=dict(color="#AB47BC", width=1.5)))
+
+        if show_bb and "BB_Upper" in df_plot.columns:
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["BB_Upper"], name="BB Sup (Resistência)",
+                                     line=dict(color="rgba(171, 71, 188, 0.5)", width=1.5, dash="dot")))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["BB_Lower"], name="BB Inf (Suporte)",
+                                     line=dict(color="rgba(171, 71, 188, 0.5)", width=1.5, dash="dot")))
+
+        if show_smart_cloud:
+            # Copiamos para evitar SettingWithCopyWarning
+            _df_cloud = df_plot.copy()
+            _df_cloud["EMA_20"] = _df_cloud["Close"].ewm(span=20, adjust=False).mean()
+            _df_cloud["EMA_50"] = _df_cloud["Close"].ewm(span=50, adjust=False).mean()
+            
+            # Série 1: Base EMA50 invisível para a nuvem de alta
+            fig.add_trace(go.Scatter(x=_df_cloud.index, y=_df_cloud["EMA_50"], 
+                                     line=dict(color="rgba(0,0,0,0)"), showlegend=False, hoverinfo='skip'))
+            
+            # Série 2: Nuvem de Alta (Verde Claro) - preenche apenas quando EMA20 > EMA50
+            ema20_up = np.where(_df_cloud["EMA_20"] > _df_cloud["EMA_50"], _df_cloud["EMA_20"], _df_cloud["EMA_50"])
+            fig.add_trace(go.Scatter(x=_df_cloud.index, y=ema20_up, name="Cloud Alta",
+                                     fill='tonexty', fillcolor='rgba(38, 166, 154, 0.3)', # Verde claro
+                                     line=dict(color="rgba(0,0,0,0)"), showlegend=False, hoverinfo='skip'))
+
+            # Série 3: Base EMA50 invisível para a nuvem de baixa
+            fig.add_trace(go.Scatter(x=_df_cloud.index, y=_df_cloud["EMA_50"], 
+                                     line=dict(color="rgba(0,0,0,0)"), showlegend=False, hoverinfo='skip'))
+            
+            # Série 4: Nuvem de Baixa (Vermelho) - preenche apenas quando EMA20 < EMA50
+            ema20_down = np.where(_df_cloud["EMA_20"] < _df_cloud["EMA_50"], _df_cloud["EMA_20"], _df_cloud["EMA_50"])
+            fig.add_trace(go.Scatter(x=_df_cloud.index, y=ema20_down, name="Cloud Baixa",
+                                     fill='tonexty', fillcolor='rgba(239, 83, 80, 0.3)', # Vermelho
+                                     line=dict(color="rgba(0,0,0,0)"), showlegend=False, hoverinfo='skip'))
+            
+            # Traça as linhas EMA 20 e EMA 50 visíveis por cima
+            fig.add_trace(go.Scatter(x=_df_cloud.index, y=_df_cloud["EMA_20"], name="EMA 20 (Varejo)",
+                                     line=dict(color="#26A69A", width=1.5)))
+            fig.add_trace(go.Scatter(x=_df_cloud.index, y=_df_cloud["EMA_50"], name="EMA 50 (Institucional)",
+                                     line=dict(color="#EF5350", width=2)))
+            
+            # Sinais da Nuvem (Cruzamento EMA20 e EMA50)
+            cross_up = (_df_cloud["EMA_20"] > _df_cloud["EMA_50"]) & (_df_cloud["EMA_20"].shift(1) <= _df_cloud["EMA_50"].shift(1))
+            cross_down = (_df_cloud["EMA_20"] < _df_cloud["EMA_50"]) & (_df_cloud["EMA_20"].shift(1) >= _df_cloud["EMA_50"].shift(1))
+            
+            fig.add_trace(go.Scatter(x=_df_cloud[cross_up].index, y=_df_cloud[cross_up]["Low"] * 0.9995, mode="markers",
+                                      marker=dict(symbol="triangle-up", size=10, color="#26A69A", line=dict(width=1, color="white")), name="Cloud Buy"))
+            fig.add_trace(go.Scatter(x=_df_cloud[cross_down].index, y=_df_cloud[cross_down]["High"] * 1.0005, mode="markers",
+                                      marker=dict(symbol="triangle-down", size=10, color="#EF5350", line=dict(width=1, color="white")), name="Cloud Sell"))
+
+        # ── Estado do Mercado (fundo colorido) ──────────────────────────────
+        if show_market_state and "Market_Zone" in df_plot.columns:
+            # Marcadores de TRANSIÇÃO (estrela amarela)
+            if "Transition" in df_plot.columns:
+                trans = df_plot[df_plot["Transition"]]
+                if not trans.empty:
+                    fig.add_trace(go.Scatter(x=trans.index, y=trans["High"] * 1.002, mode="markers",
+                                              marker=dict(symbol="star", size=16, color="#FFD700", 
+                                                          line=dict(width=2, color="white")),
+                                              name="⚡ TRANSIÇÃO"))
+            
+            # Fundo: faixas verticais para cada estado
+            zones = df_plot["Market_Zone"].values
+            colors = []
+            for z in zones:
+                if z == "EQUILIBRIO":
+                    colors.append("rgba(38, 166, 154, 0.06)")  # Verde claro
+                elif z == "DESEQUILIBRIO":
+                    colors.append("rgba(239, 83, 80, 0.06)")   # Vermelho claro
+                else:
+                    colors.append("rgba(255, 215, 0, 0.06)")   # Amarelo
+            
+            fig.add_trace(go.Bar(x=df_plot.index, y=[1]*len(df_plot), 
+                                  marker=dict(color=colors, line_width=0),
+                                  name="Estado", showlegend=False, hoverinfo="skip",
+                                  yaxis="y2", opacity=0.5))
 
         buys = df_plot[df_plot["Signal"] == 1]
         sells = df_plot[df_plot["Signal"] == -1]
-        fig.add_trace(go.Scatter(x=buys.index, y=buys["Low"] * 0.9995, mode="markers",
-                                  marker=dict(symbol="triangle-up", size=9, color="lime"), name="Compra"))
-        fig.add_trace(go.Scatter(x=sells.index, y=sells["High"] * 1.0005, mode="markers",
-                                  marker=dict(symbol="triangle-down", size=9, color="red"), name="Venda"))
+        
+        # Setas grandes e brilhantes para fácil visualização
+        fig.add_trace(go.Scatter(x=buys.index, y=buys["Low"] * 0.9990, mode="markers",
+                                  marker=dict(symbol="triangle-up", size=22, color="#00FF00", line=dict(width=2, color="black")), name="Sinal COMPRA"))
+        fig.add_trace(go.Scatter(x=sells.index, y=sells["High"] * 1.0010, mode="markers",
+                                  marker=dict(symbol="triangle-down", size=22, color="#FF0000", line=dict(width=2, color="black")), name="Sinal VENDA"))
+
+        # ── Clarezas: marcadores no gráfico ──────────────────────────────
+        if "Clarezas_BuyFlow" in df_plot.columns:
+            _bf = df_plot[df_plot["Clarezas_BuyFlow"]]
+            _sf = df_plot[df_plot["Clarezas_SellFlow"]]
+            _abs = df_plot[df_plot["Clarezas_Absorption"]] if "Clarezas_Absorption" in df_plot.columns else df_plot.iloc[0:0]
+            _cb = df_plot[df_plot["Clarezas_ContinuationBuy"]] if "Clarezas_ContinuationBuy" in df_plot.columns else df_plot.iloc[0:0]
+            _cs = df_plot[df_plot["Clarezas_ContinuationSell"]] if "Clarezas_ContinuationSell" in df_plot.columns else df_plot.iloc[0:0]
+
+            # Fluxo: círculo pequeno no topo/fundo do candle
+            fig.add_trace(go.Scatter(x=_bf.index, y=_bf["Low"] * 0.9985, mode="markers",
+                                      marker=dict(symbol="circle", size=8, color="#26A69A", line=dict(width=1, color="white")),
+                                      name="Fluxo Compra", opacity=0.8))
+            fig.add_trace(go.Scatter(x=_sf.index, y=_sf["High"] * 1.0015, mode="markers",
+                                      marker=dict(symbol="circle", size=8, color="#EF5350", line=dict(width=1, color="white")),
+                                      name="Fluxo Venda", opacity=0.8))
+
+            # Absorção: diamante (indecisão)
+            if not _abs.empty:
+                fig.add_trace(go.Scatter(x=_abs.index, y=_abs["Low"] * 0.9980, mode="markers",
+                                          marker=dict(symbol="diamond", size=10, color="#42A5F5", line=dict(width=1, color="white")),
+                                          name="Absorção", opacity=0.9))
+
+            # Continuação: estrela (sinal mais forte)
+            if not _cb.empty:
+                fig.add_trace(go.Scatter(x=_cb.index, y=_cb["Low"] * 0.9975, mode="markers",
+                                          marker=dict(symbol="star", size=14, color="#00FF00", line=dict(width=1, color="white")),
+                                          name="Cont. Compra"))
+            if not _cs.empty:
+                fig.add_trace(go.Scatter(x=_cs.index, y=_cs["High"] * 1.0025, mode="markers",
+                                          marker=dict(symbol="star", size=14, color="#FF0000", line=dict(width=1, color="white")),
+                                          name="Cont. Venda"))
 
         # Marcador da posição aberta no par atual (manual ou automática)
         if exec_enabled:
@@ -627,7 +1109,7 @@ def render_main():
         
         # Zonas de Liquidez (SMC FVG e BSL/SSL) no gráfico
         if smc_alerts_enabled:
-            from indicators import get_active_fvgs, get_active_swings
+            from indicators import get_active_fvgs, get_active_swings, find_sweeps
             bull_gaps, bear_gaps = get_active_fvgs(df_plot)
             bsl, ssl = get_active_swings(df_plot)
             
@@ -665,19 +1147,103 @@ def render_main():
                     line=dict(color="purple", width=1.5, dash="dashdot"), layer="below"
                 ))
                 
+            # Retrações de Fibonacci (Onda atual 33%, 50%, 66%)
+            from indicators import get_current_wave
+            _w_plot = get_current_wave(df_plot)
+            if _w_plot:
+                shapes.append(dict(
+                    type="line", xref="x", yref="y",
+                    x0=_w_plot["start_time"], x1=future_date,
+                    y0=_w_plot["level_33"], y1=_w_plot["level_33"],
+                    line=dict(color="lightblue", width=1.2, dash="dot"), layer="below"
+                ))
+                shapes.append(dict(
+                    type="line", xref="x", yref="y",
+                    x0=_w_plot["start_time"], x1=future_date,
+                    y0=_w_plot["level_50"], y1=_w_plot["level_50"],
+                    line=dict(color="silver", width=1.2, dash="dot"), layer="below"
+                ))
+                shapes.append(dict(
+                    type="line", xref="x", yref="y",
+                    x0=_w_plot["start_time"], x1=future_date,
+                    y0=_w_plot["level_66"], y1=_w_plot["level_66"],
+                    line=dict(color="gold", width=1.2, dash="dot"), layer="below"
+                ))
+
+            # Sweep recente (wick atravessou BSL/SSL e fechou de volta) — spring/fakeout
+            _sweeps = find_sweeps(df)
+            _sweep_in = [e for e in _sweeps if df_plot.index[0] <= e["time"] <= df_plot.index[-1]]
+            if _sweep_in:
+                fig.add_trace(go.Scatter(
+                    x=[e["time"] for e in _sweep_in],
+                    y=[e["price"] for e in _sweep_in],
+                    mode="markers",
+                    marker=dict(
+                        symbol="diamond-open", size=12,
+                        color=["#FF9800" if e["type"] == "BSL" else "#AB47BC" for e in _sweep_in],
+                        line=dict(width=2),
+                    ),
+                    name="Sweep (wick+reversão)",
+                    hovertemplate="%{x}<br>Sweep %{text} @ %{y:.5f}<extra></extra>",
+                    text=[e["type"] for e in _sweep_in],
+                ))
+                
             if shapes:
                 fig.update_layout(shapes=shapes)
 
+        # Perfil de Volume (estilo Profit Pro) — barras horizontais na lateral direita
+        _vp = None
+        if vol_profile_on:
+            try:
+                from indicators import build_volume_profile_plotly
+                _vp = build_volume_profile_plotly(df_plot, price_ref=float(df_plot["Close"].iloc[-1]))
+                if _vp:
+                    _vp_y, _vp_x, _vp_colors = _vp
+                    fig.add_trace(go.Bar(
+                        x=_vp_x, y=_vp_y,
+                        orientation="h",
+                        xaxis="x2",
+                        marker=dict(color=_vp_colors),
+                        opacity=0.55,
+                        name="Vol. por preço",
+                        hovertemplate="Preço %{y:.5f}<br>Vol %{x:.0f}<extra></extra>",
+                    ))
+            except Exception:
+                _vp = None
+
+        # Histograma de Volume Vertical (Tick Volume da MT5)
+        vol_colors = ['#26A69A' if row['Close'] >= row['Open'] else '#EF5350' for idx, row in df_plot.iterrows()]
+        fig.add_trace(go.Bar(
+            x=df_plot.index, y=df_plot["Volume"],
+            marker_color=vol_colors,
+            name="Volume (Ticks)",
+            yaxis="y2",
+            opacity=0.4,
+            hovertemplate="Vol: %{y:.0f}<extra></extra>"
+        ))
+
         fig.update_layout(
-            height=600,
+            height=650,
             template="plotly_white",
             hovermode="x unified",
             title=f"{symbol.replace('=X', '')} — {interval} (últimos {len(df_plot)} candles)",
-            xaxis_rangeslider_visible=True,
+            xaxis_rangeslider_visible=False,
+            dragmode="pan",
             xaxis=dict(fixedrange=False),
-            yaxis=dict(fixedrange=False),
+            yaxis=dict(fixedrange=False, domain=[0.25, 1.0]),  # Preço ocupa os 75% superiores
+            yaxis2=dict(domain=[0.0, 0.20], showticklabels=False, showgrid=False),  # Volume ocupa os 20% inferiores
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
+        if _vp:
+            fig.update_layout(
+                xaxis=dict(fixedrange=False, domain=[0.0, 0.92]),
+                xaxis2=dict(
+                    anchor="y", side="right",
+                    domain=[0.92, 1.0],
+                    showticklabels=False, showgrid=False, zeroline=False,
+                    range=[0, max(_vp_x) * 1.05],
+                ),
+            )
         # Traço invisível no futuro para forçar o Plotly a mostrar a margem direita
         fig.add_trace(go.Scatter(
             x=[future_date], y=[df_plot["Close"].iloc[-1]], 
@@ -685,10 +1251,27 @@ def render_main():
             showlegend=False, hoverinfo="skip"
         ))
 
-        fig.update_xaxes(
-            rangeslider_thickness=0.08,
-            range=[df_plot.index[0], future_date]
+        # Linha horizontal do preço atual + etiqueta no eixo Y direito
+        _cur_price = float(df_plot["Close"].iloc[-1])
+        fig.add_hline(
+            y=_cur_price, line_color="#2563EB", line_width=1, line_dash="dot",
+            layer="above",
         )
+        fig.add_annotation(
+            x=future_date, y=_cur_price,
+            text=f"<b>{_fmt_price(_cur_price)}</b>",
+            showarrow=False,
+            font=dict(size=11, color="white"),
+            bgcolor="#2563EB",
+            bordercolor="#2563EB",
+            borderwidth=1,
+            xanchor="left", yanchor="middle",
+        )
+
+        fig.update_layout(xaxis=dict(
+            range=[df_plot.index[0], future_date],
+            rangeslider=dict(thickness=0.08),
+        ))
         st.plotly_chart(fig, use_container_width=True, config=_PLOTLY_CONFIG)
 
         # RSI detalhado
@@ -699,6 +1282,40 @@ def render_main():
             fig_rsi.add_hline(y=rsi_os, line_dash="dash", line_color="#059669", annotation_text=f"limite venda {rsi_os}")
             fig_rsi.update_layout(height=250, template="plotly_white")
             st.plotly_chart(fig_rsi, use_container_width=True, config=_PLOTLY_CONFIG)
+
+        # Volatilidade precisa: percentil do regime + σ por candle
+        if "Vol_Percentile" in df.columns:
+            with st.expander("🌋 Volatilidade precisa (percentil do regime + stop adaptativo)"):
+                fig_vol = go.Figure()
+                fig_vol.add_trace(go.Scatter(
+                    x=df.index, y=df["Vol_Percentile"], name="Percentil de vol",
+                    line=dict(color="#F59E0B", width=2),
+                ))
+                fig_vol.add_hline(y=float(vol_max_pct), line_dash="dash", line_color="#dc2626",
+                                  annotation_text=f"bloqueio P{int(vol_max_pct)}")
+                fig_vol.add_hline(y=75, line_dash="dot", line_color="#9ca3af", annotation_text="ALTA")
+                fig_vol.add_hline(y=50, line_dash="dot", line_color="#9ca3af", annotation_text="mediana")
+                fig_vol.add_trace(go.Scatter(
+                    x=df.index, y=df["Vol_Stop_Mult"] * 50, name="Stop × (escala/50)",
+                    line=dict(color="#2563EB", width=1, dash="dot"), yaxis="y2",
+                ))
+                fig_vol.update_layout(
+                    height=280, template="plotly_white",
+                    yaxis=dict(title="Percentil (0-100)", range=[-5, 105]),
+                    yaxis2=dict(title="Stop ×", overlaying="y", side="right",
+                                range=[40, 90], showgrid=False),
+                    legend=dict(orientation="h", y=1.12),
+                )
+                st.plotly_chart(fig_vol, use_container_width=True, config=_PLOTLY_CONFIG)
+                _vs_now = df.iloc[-1]
+                st.caption(
+                    f"Último candle: σ **{float(_vs_now.get('Vol_Precise_Pct') or 0):.3f}%**/candle · "
+                    f"percentil **{float(_vs_now.get('Vol_Percentile') or 0):.0f}** "
+                    f"(**{_vs_now.get('Vol_Regime') or '—'}**) · "
+                    f"stop **×{float(_vs_now.get('Vol_Stop_Mult') or 1.0):.2f}** · "
+                    f"ER **{float(_vs_now.get('Efficiency_Ratio') or 0):.2f}** "
+                    "(0=lateral, 1=tendência). Estimadores: Parkinson + Garman-Klass + Yang-Zhang + realized."
+                )
 
     # ==============================================================
     # ABA: BACKTEST
@@ -720,6 +1337,7 @@ def render_main():
                 swap_pips_per_day=float(swap_pips_per_day),
                 risk_per_trade_pct=float(risk_pct),
                 pip_size=_pip_size,
+                vol_stop=bool(vol_adaptive_stop),
             )
             verdict = summarize(metrics)
             st.warning(verdict)
@@ -796,7 +1414,7 @@ def render_main():
         if ai_enabled:
             import ai_analysis as ai_mod
             st.subheader("Análise de probabilidade e risco (IA)")
-            rule_signal = int(df["Signal"].iloc[-1])
+            rule_signal = int(df["Signal"].iloc[signal_index(df, trigger_mode)])
             ml_pred = None
             ml_p = None
             if result[0] is not None:
@@ -813,7 +1431,7 @@ def render_main():
                 try:
                     res = ai_analysis_cached(
                         df, direction, float(sl_atr), float(tp_atr), float(spread_pips),
-                        _pip_size, ml_p, ml_dir, ai_horizon, ai_paths,
+                        _pip_size, ml_p, ml_dir, ai_horizon, ai_paths, llm_config=llm_config
                     )
                 except (ValueError, KeyError) as e:
                     st.warning(str(e))
@@ -851,11 +1469,11 @@ def render_main():
                         )
                         st.plotly_chart(fig_mc, use_container_width=True, config=_PLOTLY_CONFIG)
 
-                    # parecer narrativo desligado definitivamente (zero custo de tokens)
-                    st.info(
-                        "ℹ️ O parecer narrativo da IA foi desligado por padrão para não gerar "
-                        "custo de tokens. Estas métricas são 100% offline (Monte Carlo, VaR, P(TP/SL))."
-                    )
+                    parecer = res.get("parecer")
+                    if parecer:
+                        st.markdown(f"### 🤖 Parecer do Analista IA (LLM)\n> {parecer}")
+                    elif llm_config:
+                        st.error("Falha ao gerar o parecer LLM. Verifique sua chave da API e se as dependências (google-generativeai/openai) estão instaladas.")
 
                     if score < 55:
                         st.warning(
@@ -1044,6 +1662,66 @@ def render_main():
                 "Em 20-30 trades você verá onde sua leitura acerta e onde você está forçando."
             )
 
+        st.markdown("---")
+        st.subheader("🔗 Dashboard MT5 (Automático)")
+        st.caption("Estatísticas e operações puxadas diretamente da corretora.")
+        try:
+            from mt5_bridge import get_bridge
+            br = get_bridge()
+            if br.available():
+                deals = br.history_deals_get(days=30)
+                if not deals:
+                    df_deals = pd.DataFrame(columns=['time', 'symbol', 'type', 'volume', 'price', 'profit'])
+                else:
+                    df_deals = pd.DataFrame(deals)
+                    df_deals['time'] = pd.to_datetime(df_deals['time'], unit='s')
+
+                if not df_deals.empty:
+                    df_deals['cumulative_profit'] = df_deals['profit'].cumsum()
+                    total_trades = len(df_deals)
+                    wins = len(df_deals[df_deals['profit'] > 0])
+                    losses = len(df_deals[df_deals['profit'] < 0])
+                    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                    total_profit = df_deals['profit'].sum()
+                else:
+                    df_deals['cumulative_profit'] = []
+                    total_trades = 0
+                    wins = 0
+                    losses = 0
+                    win_rate = 0
+                    total_profit = 0.0
+
+                # Cards de Métricas Principais
+                dc1, dc2, dc3, dc4 = st.columns(4)
+                dc1.metric("Resultado Total", f"${total_profit:.2f}", f"{win_rate:.1f}% acerto")
+                dc2.metric("Operações Vencedoras", wins)
+                dc3.metric("Operações Perdedoras", losses)
+                dc4.metric("Total de Trades", total_trades)
+
+                # Gráfico da Curva de Capital
+                st.markdown("**Curva de Capital (Acumulado)**")
+                if not df_deals.empty:
+                    fig_eq_mt5 = go.Figure(go.Scatter(x=df_deals['time'], y=df_deals['cumulative_profit'], mode="lines", name="Capital", line=dict(color="#38bdf8", width=2)))
+                else:
+                    fig_eq_mt5 = go.Figure()
+                    fig_eq_mt5.add_annotation(text="Sem operações no período", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+                fig_eq_mt5.update_layout(height=300, template="plotly_white", margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig_eq_mt5, use_container_width=True, config=_PLOTLY_CONFIG)
+
+                # Tabela de Últimos Trades
+                with st.expander("Últimas Posições Fechadas (MT5)", expanded=True):
+                    if not df_deals.empty:
+                        df_deals['Tipo'] = df_deals['type'].map({0: "BUY", 1: "SELL"}).fillna("OTHER")
+                        df_show = df_deals[['time', 'symbol', 'Tipo', 'volume', 'price', 'profit']].tail(10).iloc[::-1]
+                        df_show = df_show.rename(columns={'time': 'Data/Hora', 'symbol': 'Ativo', 'volume': 'Lote', 'price': 'Preço', 'profit': 'Lucro ($)'})
+                        st.dataframe(df_show, hide_index=True)
+                    else:
+                        st.info("Nenhum histórico de posições fechadas.")
+            else:
+                st.warning("⚠️ MT5 Bridge indisponível. Confirme se o mt5server.exe está rodando.")
+        except Exception as e:
+            st.error(f"Erro ao carregar dados do MT5: {e}")
+
     # ==============================================================
     # ABA: EXECUÇÃO — alertas Telegram + paper/MT5
     # ==============================================================
@@ -1053,8 +1731,11 @@ def render_main():
             if not alerts_mod.configured():
                 st.warning("📣 Alertas marcados, mas faltam telegram_token/telegram_chat no secrets.toml.")
             else:
-                msg = alerts_mod.notify_signal_change(symbol, int(df["Signal"].iloc[-1]),
-                                                      float(df["Close"].iloc[-1]), interval)
+                # O candle acionável não é sempre o último: o pullback_liquidity
+                # sinaliza no candle FECHADO (-2). Fonte única: signal_index().
+                _sig_idx = signal_index(df, trigger_mode)
+                msg = alerts_mod.notify_signal_change(symbol, int(df["Signal"].iloc[_sig_idx]),
+                                                      float(df["Close"].iloc[_sig_idx]), interval)
                 if msg:
                     st.success(f"📣 Alerta enviado ao Telegram:\n\n{msg}")
                 else:
@@ -1082,50 +1763,98 @@ def render_main():
                         "e o bridge rodando (veja README → `start_mt5.sh`)."
                     )
 
-            last_signal = int(df["Signal"].iloc[-1])
-            last_close = float(df["Close"].iloc[-1])
-            last_atr = float(df["ATR"].iloc[-1]) if pd.notna(df["ATR"].iloc[-1]) else 0.0
+            # Candle ACIONÁVEL: o pullback_liquidity grava em -2, não em -1.
+            _ai = signal_index(df, trigger_mode)
+            last_signal = int(df["Signal"].iloc[_ai])
+            last_close = float(df["Close"].iloc[_ai])
+            last_atr = float(df["ATR"].iloc[_ai]) if pd.notna(df["ATR"].iloc[_ai]) else 0.0
 
             # Stops explícitos da estratégia (ex.: Fimathe — SL/TP por canal).
             # O broker os usa exatamente como o backtest para validação honesta.
             _sug_sl = 0.0
             _sug_tp = 0.0
-            if "Suggested_SL" in df.columns and pd.notna(df["Suggested_SL"].iloc[-1]):
-                _sug_sl = float(df["Suggested_SL"].iloc[-1])
-            if "Suggested_TP" in df.columns and pd.notna(df["Suggested_TP"].iloc[-1]):
-                _sug_tp = float(df["Suggested_TP"].iloc[-1])
+            if "Suggested_SL" in df.columns and pd.notna(df["Suggested_SL"].iloc[_ai]):
+                _sug_sl = float(df["Suggested_SL"].iloc[_ai])
+            if "Suggested_TP" in df.columns and pd.notna(df["Suggested_TP"].iloc[_ai]):
+                _sug_tp = float(df["Suggested_TP"].iloc[_ai])
 
-            msg = broker.on_signal(
-                symbol, last_signal, last_close, last_atr,
-                sl_atr=float(sl_atr), tp_atr=float(tp_atr), risk_pct=float(risk_pct), tp_pips=float(tp_pips),
-                trailing_stop_pips=float(trailing_stop_pips), dynamic_risk_margin=float(dyn_margin),
-                max_open_positions=int(max_open_positions),
-                suggested_sl=_sug_sl, suggested_tp=_sug_tp, pip_size=_pip_size,
-            )
+            # Multiplicador do regime de volatilidade (stop adaptativo)
+            _vol_mult = 1.0
+            if vol_adaptive_stop and "Vol_Stop_Mult" in df.columns:
+                _vm = df["Vol_Stop_Mult"].iloc[_ai]
+                if pd.notna(_vm) and float(_vm) > 0:
+                    _vol_mult = float(_vm)
+
+            # Mesmo lock do cron: o fragmento roda a cada 10 s enquanto o cron
+            # roda a cada 5 min — sem mutex os dois liam "sem posição" juntos.
+            from safety import execution_lock, trading_allowed
+            with execution_lock(blocking=False) as _got_lock:
+                if not _got_lock:
+                    msg = "⏳ Outro executor ativo (cron) — tick do dashboard ignorado."
+                else:
+                    _allowed, _why = trading_allowed()
+                    if not _allowed:
+                        msg = f"🛑 Trading desativado ({_why})"
+                    else:
+                        msg = broker.on_signal(
+                            symbol, last_signal, last_close, last_atr,
+                            sl_atr=float(sl_atr), tp_atr=float(tp_atr), risk_pct=float(risk_pct), tp_pips=float(tp_pips),
+                            trailing_stop_pips=float(trailing_stop_pips), dynamic_risk_margin=float(dyn_margin),
+                            max_open_positions=int(max_open_positions),
+                            suggested_sl=_sug_sl, suggested_tp=_sug_tp, pip_size=_pip_size,
+                            vol_mult=_vol_mult,
+                        )
             if msg:
                 st.info(msg)
 
             summ = broker.summary()
             c1, c2, c3, c4, c5 = st.columns(5)
             if broker_type == "Paper (demo)":
-                c1.metric("Capital (demo)", f"${summ['capital']:,.2f}", f"{summ['return_pct']:+.2f}%")
+                _rp = summ.get("return_pct")
+                c1.metric("Capital (demo)", f"${summ['capital']:,.2f}",
+                          (f"{_rp:+.2f}%" if _rp is not None else None))
                 c2.metric("PnL total", f"${summ['pnl_total']:,.2f}")
                 c3.metric("Trades", summ["trades"])
                 c4.metric("Vencedores", summ["wins"])
                 c5.metric("Sinal atual", {1: "🟢 Compra", -1: "🔴 Venda", 0: "⚪ Neutro"}[last_signal])
             else:
+                if summ.get("error"):
+                    st.error(f"MT5: {summ['error']}")
                 c1.metric("Equity (MT5)", f"${summ.get('capital', 0):,.2f}")
                 c2.metric("Saldo (MT5)", f"${summ.get('initial_capital', 0):,.2f}")
-                c3.metric("Lucro flutuante", f"${summ.get('pnl_total', 0):,.2f}")
-                c4.metric("Posições abertas", summ.get("open_positions", 0))
+                c3.metric("Lucro realizado (30d robô)", f"${summ.get('pnl_total', 0):,.2f}")
+                c4.metric("Posições do robô", summ.get("open_positions", 0))
                 c5.metric("Sinal atual", {1: "🟢 Compra", -1: "🔴 Venda", 0: "⚪ Neutro"}[last_signal])
-                if summ.get("login"):
-                    st.caption(f"Conta: **{summ.get('company')}** · login `{summ.get('login')}` · "
+                _mode = summ.get("account_mode") or "unknown"
+                if _mode == "real":
+                    from executor import live_trading_enabled
+                    st.warning(
+                        f"⚠️ **CONTA REAL** — login `{summ.get('login')}` · "
+                        f"{summ.get('company') or summ.get('server')}. "
+                        + ("`ALLOW_LIVE_TRADING=1` ativo: ordens vão para dinheiro de verdade."
+                           if live_trading_enabled() else
+                           "Entradas BLOQUEADAS até `ALLOW_LIVE_TRADING=1`.")
+                    )
+                elif _mode == "demo":
+                    st.caption(f"Conta **demo** · login `{summ.get('login')}` · "
                                f"servidor `{summ.get('server')}`")
+                else:
+                    st.warning(f"Modo da conta desconhecido ({_mode}) — entradas bloqueadas.")
+                if summ.get("margin_free") is not None:
+                    st.caption(f"Margem livre: {float(summ['margin_free']):,.2f}")
+
+            from safety import kill_switch_reason
+            _ks = kill_switch_reason()
+            if _ks:
+                st.error(f"🛑 **KILL-SWITCH ATIVO** — {_ks}  "
+                         f"(arquivo `TRADING_DISABLED`; reative com "
+                         f"`python safety.py enable`)")
 
             positions = broker.get_positions()
             if positions:
-                pos = positions.get(symbol)
+                # chave do MT5 é o símbolo SEM hífen (XAUUSD), a do app tem (XAU-USD)
+                from executor import mt5_symbol as _m5sym
+                pos = positions.get(symbol) or positions.get(_m5sym(symbol))
                 if pos:
                     side = "LONG" if pos["side"] == 1 else "SHORT"
                     st.write(f"**Posição aberta ({symbol}):** {side} @ {pos['entry']:.5f} "
@@ -1153,8 +1882,8 @@ def render_main():
                 b1, b2, b3 = st.columns(3)
                 if b1.button("🚀 Comprar agora", type="primary"):
                     _side = 1
-                    _sl = manual_sl or (last_close - sl_atr * last_atr)
-                    _tp = manual_tp or (last_close + tp_atr * last_atr)
+                    _sl = manual_sl or (last_close - sl_atr * last_atr * _vol_mult)
+                    _tp = manual_tp or (last_close + tp_atr * last_atr * _vol_mult)
                     _size = manual_lots * CONTRACT_SIZE if broker_type == "Paper (demo)" else manual_lots
                     _ok = broker.place_order(symbol, _side, last_close, _sl, _tp, _size)
                     _msg2 = getattr(broker, "_last_msg", "")
@@ -1162,8 +1891,8 @@ def render_main():
                                f"{f' (MT5: {_msg2})' if _msg2 else ''}")
                 if b2.button("🚀 Vender agora", type="primary"):
                     _side = -1
-                    _sl = manual_sl or (last_close + sl_atr * last_atr)
-                    _tp = manual_tp or (last_close - tp_atr * last_atr)
+                    _sl = manual_sl or (last_close + sl_atr * last_atr * _vol_mult)
+                    _tp = manual_tp or (last_close - tp_atr * last_atr * _vol_mult)
                     _size = manual_lots * CONTRACT_SIZE if broker_type == "Paper (demo)" else manual_lots
                     _ok = broker.place_order(symbol, _side, last_close, _sl, _tp, _size)
                     _msg2 = getattr(broker, "_last_msg", "")
@@ -1176,15 +1905,156 @@ def render_main():
                     else:
                         st.success(f"Posição fechada — PnL {_pnl:+.2f}")
 
-            with st.expander(f"Histórico de trades ({summ.get('trades', 0)})"):
+            if broker_type == "MetaTrader 5":
+                with st.expander("📋 Ordens Pendentes", expanded=False):
+                    st.caption("Pendure ordens BUY_LIMIT, SELL_LIMIT, BUY_STOP ou SELL_STOP no MT5.")
+                    from mt5_bridge import get_bridge as _get_bridge2
+                    from executor import mt5_symbol as _mt5_sym
+                    _br2 = _get_bridge2()
+                    if _br2.available():
+                        pc1, pc2 = st.columns(2)
+                        with pc1:
+                            _pend_type = st.selectbox("Tipo", ["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"])
+                        with pc2:
+                            _pend_lots = st.number_input("Volume (lotes)", min_value=0.01, max_value=50.0, value=0.01, step=0.01, key="pend_lots")
+
+                        pp1, pp2, pp3 = st.columns(3)
+                        with pp1:
+                            _pend_price = st.number_input("Preço gatilho", value=0.0, step=0.01, format="%.5f", key="pend_price")
+                        with pp2:
+                            _pend_sl = st.number_input("SL (0 = sem)", value=0.0, step=0.01, format="%.5f", key="pend_sl")
+                        with pp3:
+                            _pend_tp = st.number_input("TP (0 = sem)", value=0.0, step=0.01, format="%.5f", key="pend_tp")
+
+                        if st.button("📌 Pendurar ordem", type="primary", key="btn_pend"):
+                            if _pend_price <= 0:
+                                st.error("Informe um preço de gatilho válido.")
+                            else:
+                                _res = _br2.place_pending(
+                                    symbol=_mt5_sym(symbol),
+                                    order_type=_pend_type,
+                                    volume=_pend_lots,
+                                    price=_pend_price,
+                                    sl=_pend_sl if _pend_sl > 0 else None,
+                                    tp=_pend_tp if _pend_tp > 0 else None,
+                                )
+                                _code = getattr(_res, "retcode", None)
+                                _comment = str(getattr(_res, "comment", "")) or str(_code)
+                                if _code == 10009:
+                                    st.success(f"✅ Ordem pendente {_pend_type} {symbol} @ {_pend_price:.5f} — {_comment}")
+                                else:
+                                    st.error(f"❌ Falha: {_comment}")
+
+                        _pend = _br2.pending_orders()
+                        if _pend:
+                            st.markdown("**Ordens pendentes ativas:**")
+                            _df_pend = pd.DataFrame(_pend)
+                            _df_pend['time_setup'] = pd.to_datetime(_df_pend['time_setup'], unit='s')
+                            _df_pend = _df_pend.rename(columns={
+                                'ticket': 'Ticket', 'symbol': 'Ativo', 'type_name': 'Tipo',
+                                'volume': 'Lote', 'price': 'Preço', 'sl': 'SL', 'tp': 'TP', 'time_setup': 'Criada em'
+                            })
+                            st.dataframe(_df_pend[['Ticket', 'Ativo', 'Tipo', 'Lote', 'Preço', 'SL', 'TP', 'Criada em']], hide_index=True, use_container_width=True)
+
+                            _cancel_ticket = st.number_input("Ticket para cancelar", value=0, step=1, key="cancel_ticket")
+                            if st.button("❌ Cancelar ordem", key="btn_cancel"):
+                                if _cancel_ticket > 0:
+                                    _res2 = _br2.cancel_order(_cancel_ticket)
+                                    _code2 = getattr(_res2, "retcode", None)
+                                    if _code2 == 10009:
+                                        st.success(f"✅ Ordem {_cancel_ticket} cancelada.")
+                                    else:
+                                        st.error(f"❌ Falha ao cancelar: {getattr(_res2, 'comment', _code2)}")
+                                else:
+                                    st.warning("Informe o ticket da ordem.")
+                        else:
+                            st.info("Nenhuma ordem pendente ativa.")
+                    else:
+                        st.warning("MT5 indisponível para ordens pendentes.")
+
+            with st.expander(f"Histórico de trades", expanded=True):
                 if broker_type == "Paper (demo)":
                     hist = broker.state.get("history", [])
                     if hist:
-                        st.dataframe(pd.DataFrame(hist))
+                        _df_hist = pd.DataFrame(hist)
+                        _df_hist['PnL'] = _df_hist['pnl'].astype(float)
+                        _df_hist['Resultado'] = _df_hist['PnL'].apply(lambda x: '✅ Gain' if x > 0 else '❌ Loss')
+                        _df_hist['Dia'] = pd.to_datetime(_df_hist['exit_ts']).dt.date
+
+                        _total = len(_df_hist)
+                        _gains = len(_df_hist[_df_hist['PnL'] > 0])
+                        _losses = len(_df_hist[_df_hist['PnL'] <= 0])
+                        _win_rate = (_gains / _total * 100) if _total > 0 else 0
+                        _total_pnl = _df_hist['PnL'].sum()
+
+                        mc1, mc2, mc3, mc4 = st.columns(4)
+                        mc1.metric("Total de trades", _total)
+                        mc2.metric("🟢 Gains", f"{_gains}", f"{_win_rate:.1f}% acerto")
+                        mc3.metric("🔴 Losses", f"{_losses}", f"{100 - _win_rate:.1f}% erro")
+                        mc4.metric("💰 PnL Total", f"${_total_pnl:+,.2f}")
+
+                        _daily = _df_hist.groupby('Dia').agg(
+                            Trades=('PnL', 'count'),
+                            Gains=('PnL', lambda x: (x > 0).sum()),
+                            Losses=('PnL', lambda x: (x <= 0).sum()),
+                            Lucro=('PnL', 'sum')
+                        ).reset_index()
+                        _daily['Acerto %'] = (_daily['Gains'] / _daily['Trades'] * 100).round(1)
+                        st.markdown("**Trades por dia:**")
+                        st.dataframe(_daily, hide_index=True, use_container_width=True)
+
+                        _df_hist['Data'] = pd.to_datetime(_df_hist['exit_ts']).dt.strftime('%d/%m %H:%M')
+                        _df_show = _df_hist[['Data', 'symbol', 'side', 'entry', 'exit', 'PnL', 'Resultado']].copy()
+                        _df_show.columns = ['Data', 'Ativo', 'Lado', 'Entrada', 'Saída', 'Lucro ($)', 'Resultado']
+                        st.markdown(trade_table_html(_df_show), unsafe_allow_html=True)
                     else:
                         st.info("Nenhum trade ainda. Os sinais aparecem aqui quando executarem no papel.")
                 else:
-                    st.info("Histórico de trades: veja a aba 'Histórico' no próprio MetaTrader 5.")
+                    try:
+                        from mt5_bridge import get_bridge
+                        _br = get_bridge()
+                        if _br.available():
+                            _debug = _br.debug_deals(days=30)
+                            _deals = _debug.get("deals", [])
+                            if _deals:
+                                _df_deals = pd.DataFrame(_deals)
+                                _df_deals['time'] = pd.to_datetime(_df_deals['time'], unit='s')
+                                _df_deals['Tipo'] = _df_deals['type'].map({0: "BUY", 1: "SELL"}).fillna("OTHER")
+                                _df_deals['Resultado'] = _df_deals['profit'].apply(lambda x: '✅ Gain' if x > 0 else '❌ Loss')
+                                _df_deals['Dia'] = _df_deals['time'].dt.date
+
+                                _total = len(_df_deals)
+                                _gains = len(_df_deals[_df_deals['profit'] > 0])
+                                _losses = len(_df_deals[_df_deals['profit'] <= 0])
+                                _win_rate = (_gains / _total * 100) if _total > 0 else 0
+                                _total_pnl = _df_deals['profit'].sum()
+
+                                mc1, mc2, mc3, mc4 = st.columns(4)
+                                mc1.metric("Total de trades", _total)
+                                mc2.metric("🟢 Gains", f"{_gains}", f"{_win_rate:.1f}% acerto")
+                                mc3.metric("🔴 Losses", f"{_losses}", f"{100 - _win_rate:.1f}% erro")
+                                mc4.metric("💰 PnL Total", f"${_total_pnl:+,.2f}")
+
+                                _daily = _df_deals.groupby('Dia').agg(
+                                    Trades=('profit', 'count'),
+                                    Gains=('profit', lambda x: (x > 0).sum()),
+                                    Losses=('profit', lambda x: (x <= 0).sum()),
+                                    Lucro=('profit', 'sum')
+                                ).reset_index()
+                                _daily['Acerto %'] = (_daily['Gains'] / _daily['Trades'] * 100).round(1)
+                                st.markdown("**Trades por dia:**")
+                                st.dataframe(_daily, hide_index=True, use_container_width=True)
+
+                                _df_show = _df_deals[['time', 'symbol', 'Tipo', 'volume', 'price', 'profit', 'Resultado']].tail(20).iloc[::-1]
+                                _df_show = _df_show.rename(columns={'time': 'Data/Hora', 'symbol': 'Ativo', 'volume': 'Lote', 'price': 'Preço', 'profit': 'Lucro ($)'})
+                                st.markdown(trade_table_html(_df_show), unsafe_allow_html=True)
+                            else:
+                                st.warning(f"Nenhum trade encontrado via MT5. Total de deals brutos: {_debug.get('total', '?')}")
+                                st.json(_debug)
+                        else:
+                            st.info("MT5 indisponível para buscar histórico.")
+                    except Exception as e:
+                        st.error(f"Erro ao buscar histórico: {e}")
         else:
             st.caption("Habilite 'Acompanhar sinais (paper/MT5)' na sidebar para ver esta aba.")
 
@@ -1212,5 +2082,5 @@ def render_main():
 
 
 if auto_refresh:
-    render_main = st.fragment(run_every=f"{_refresh_opts[refresh_label]}s")(render_main)
+    render_main = st.fragment(run_every=_refresh_opts[refresh_label])(render_main)
 render_main()

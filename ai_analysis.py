@@ -301,14 +301,49 @@ def conviction_score(stats, mc):
 
 
 # ---------------------------------------------------------------------------
-# Parecer narrativo do LLM (OpenAI-compatible). DESLIGADO por padrão.
+# Parecer narrativo do LLM (OpenAI / Gemini)
 # ---------------------------------------------------------------------------
 def llm_parecer(stats, mc, score, config):
-    """
-    O parecer narrativo foi desligado por decisão do usuário (consumia tokens).
-    Qualquer chamada devolve None — a estatística local continua 100% offline.
-    Para religar, reintegre a chamada à API por sua conta e risco.
-    """
+    if not config or not config.get("api_key"):
+        return None
+        
+    direcao_txt = 'COMPRA (LONG)' if stats['direction'] == 1 else 'VENDA (SHORT)'
+    prompt = f"""Você é um analista quantitativo sênior. Baseado nestes dados numéricos calculados localmente sobre uma possível operação de {direcao_txt}, dê um parecer sucinto (máx 3 linhas) se a operação vale a pena ou se é uma armadilha. Seja direto, não invente números.
+- Score de Convicção: {score:.1f}/100
+- Probabilidade de atingir o Take Profit (Monte Carlo): {mc['p_tp']*100:.1f}%
+- Frequência Direcional Histórica: {stats['p_hist_dir']*100:.1f}%
+- Volatilidade: {stats['vol_label']}
+- Tendência: {stats['trend_label']}
+- Risco/Retorno Esperado: {mc['expected_r']:.2f}R"""
+
+    provider = config.get("provider", "gemini").lower()
+    api_key = config["api_key"]
+
+    if provider == "gemini":
+        try:
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e:
+            print(f"Erro Gemini: {e}")
+            return f"Erro na IA Gemini: {e}"
+    elif provider == "openai":
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=150
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Erro OpenAI: {e}")
+            return f"Erro na IA OpenAI: {e}"
     return None
 
 

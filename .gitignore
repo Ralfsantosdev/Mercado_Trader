@@ -19,6 +19,8 @@ service-account*.json
 execution_state.json
 alert_state.json
 journal_state.json
+.watchdog_state.json
+robot.pid
 *.log
 *.log.*
 
@@ -34,6 +36,10 @@ ENV/
 *.egg-info/
 .pytest_cache/
 .ipynb_checkpoints/
+
+# --- Config local de ferramentas (contém tokens) ---
+.mcp.json
+.codex/
 
 # --- IDEs ---
 .vscode/

@@ -31,6 +31,26 @@ MIN_TEST_TRADES = 3
 
 def grid(trigger_mode="auto"):
     combos = []
+    
+    if trigger_mode == "pullback_liquidity":
+        for adx_min in (18, 22, 25):
+            for min_stop_atr in (0.6, 0.8, 1.0):
+                for max_stop_atr in (1.2, 1.5, 2.0):
+                    for pb_tol in (0.10, 0.15, 0.20):
+                        combos.append(dict(
+                            trigger_mode="pullback_liquidity",
+                            pls_config_kwargs={
+                                "adx_min": adx_min,
+                                "min_stop_atr": min_stop_atr,
+                                "max_stop_atr": max_stop_atr,
+                                "pullback_tolerance_atr": pb_tol,
+                            },
+                            # compatibilidade com código existente:
+                            rsi_overbought=70, rsi_oversold=30, use_cross=True, session="",
+                            min_adx=adx_min, sl_atr=1.5, tp_atr=2.0,
+                        ))
+        return combos
+
     for rsi_ob in (60, 70, 80):
         for rsi_os in (20, 30, 40):
             for use_cross in (True, False):
@@ -55,6 +75,7 @@ def eval_combo(df, params, spread_pips, pip_size, split_ts):
         trigger_mode=params.get("trigger_mode", "auto"),
         pullback_ema=params.get("pullback_ema", 50),
         session=params["session"], min_adx=params["min_adx"],
+        pls_config_kwargs=params.get("pls_config_kwargs"),
     )
     trades, _, _ = run_backtest(
         df, spread_pips=spread_pips, sl_atr=params["sl_atr"],
@@ -123,7 +144,7 @@ def main():
     ap.add_argument("--pip", type=float, default=0.0001, help="valor de 1 pip do ativo")
     ap.add_argument("--top", type=int, default=5)
     ap.add_argument("--trigger-mode", default="auto",
-                    choices=["auto", "slope", "cross", "pullback", "3_9_20"],
+                    choices=["auto", "slope", "cross", "pullback", "3_9_20", "pullback_liquidity", "clarezas"],
                     help="Gatilho a otimizar")
     ap.add_argument("--pullback-ema", type=int, default=50)
     args = ap.parse_args()
@@ -161,9 +182,15 @@ def main():
         rsi = f"{params['rsi_overbought']}/{params['rsi_oversold']}"
         train_s = f"{tm['n']}/{tm['pf']}"
         test_s = f"{em['n']}/{em['pf']}/{em['exp']}" if em else "sem trades"
-        print(f"{rsi:<8}{cross:<6}{sess:<4}{params['min_adx']:<4}"
-              f"{params['sl_atr']:<5}{params['tp_atr']:<5}"
-              f"{train_s:>12}{test_s:>20}")
+        
+        if params.get("trigger_mode") == "pullback_liquidity":
+            cfg = params.get("pls_config_kwargs", {})
+            print(f"PLS -> ADX:{cfg.get('adx_min')} MinSL:{cfg.get('min_stop_atr')} MaxSL:{cfg.get('max_stop_atr')} Tol:{cfg.get('pullback_tolerance_atr')}")
+            print(f"       {train_s:>12}{test_s:>20}")
+        else:
+            print(f"{rsi:<8}{cross:<6}{sess:<4}{params['min_adx']:<4}"
+                  f"{params['sl_atr']:<5}{params['tp_atr']:<5}"
+                  f"{train_s:>12}{test_s:>20}")
 
     # resumo honesto
     survived = [r for r in ranked if r[2] and r[2]["n"] >= MIN_TEST_TRADES and r[2]["exp"] > 0]

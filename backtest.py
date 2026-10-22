@@ -5,6 +5,10 @@ Como funciona:
 - Entra no close do candle em que o sinal aparece (long=+1, short=-1).
 - Sai por: stop loss / take profit em múltiplos de ATR, sinal contrário,
   ou fim do histórico.
+- Stop ADAPTATIVO: quando existe o regime de volatilidade precisa
+  (coluna Vol_Stop_Mult), SL e TP em ATR são multiplicados pelo regime —
+  em rajada o stop alarga (nunca aperta), igual à execução ao vivo.
+  Trades em regime EXTREMA/chop já vêm zerados pelo filtro de sinal.
 - Custo: spread (pips * valor do pip) em cada operação — sem isso o backtest
   superestima o resultado (pegadinha clássica).
 - Dimensionamento: risco fixo por operação (% da equity), posição calculada
@@ -36,6 +40,7 @@ def run_backtest(
     trailing_stop_pips: float = 0.0,
     dynamic_risk_margin: float = 0.0,
     swap_pips_per_day: float = 0.5,
+    vol_stop: bool = True,
 ):
     data = df.copy().dropna(subset=["ATR", "Signal"])
     if len(data) < 2:
@@ -45,6 +50,8 @@ def run_backtest(
     open_trade = None
     trades = []
     equity_curve = []
+    entry_regime = ""
+    entry_mult = 1.0
 
     for i in range(len(data)):
         row = data.iloc[i]
@@ -103,6 +110,8 @@ def run_backtest(
                     "Preço entrada": round(entry_price, 5),
                     "Preço saída": round(exit_price, 5),
                     "Motivo saída": exit_reason,
+                    "Regime vol": entry_regime,
+                    "Stop mult": round(entry_mult, 2),
                     "Tamanho": round(size, 2),
                     "PnL": round(pnl, 2),
                     "Retorno %": round(ret_pct, 3),
@@ -114,18 +123,29 @@ def run_backtest(
         if open_trade is None and signal != 0:
             custom_sl = row.get("Suggested_SL")
             custom_tp = row.get("Suggested_TP")
-            
+
+            # Multiplicador do regime de volatilidade (percentil rolante):
+            # 1.0 = vol normal/baixa; até 1.6 = rajada extrema (stop alarga).
+            vol_mult = 1.0
+            if vol_stop:
+                _vm = row.get("Vol_Stop_Mult")
+                if _vm is not None and pd.notna(_vm) and float(_vm) > 0:
+                    vol_mult = float(_vm)
+            entry_mult = vol_mult
+
+            entry_regime = str(row.get("Vol_Regime") or "")
+
             if pd.notna(custom_sl) and custom_sl > 0:
                 sl_distance = abs(float(row["Close"]) - float(custom_sl))
                 sl_price = float(custom_sl)
             else:
-                sl_distance = max(sl_atr * atr, min_sl_pips * pip_size)
+                sl_distance = max(sl_atr * atr * vol_mult, min_sl_pips * pip_size)
                 sl_price = float(row["Close"]) - signal * sl_distance
 
             if pd.notna(custom_tp) and custom_tp > 0:
                 tp_price = float(custom_tp)
             else:
-                tp_dist = tp_pips * pip_size if tp_pips > 0 else max(tp_atr * atr, min_sl_pips * pip_size)
+                tp_dist = tp_pips * pip_size if tp_pips > 0 else max(tp_atr * atr * vol_mult, min_sl_pips * pip_size)
                 tp_price = float(row["Close"]) + signal * tp_dist
             
             # Ajuste de risco dinâmico baseado na confiança da IA (se ativado)
@@ -138,7 +158,12 @@ def run_backtest(
                 size = (cash * applied_risk_pct / 100.0) / sl_distance
             else:
                 size = 0.0
-            open_trade = (ts, float(row["Close"]), signal, size, sl_price, tp_price)
+                
+            # Entra no Open do candle seguinte, simulando latência realista.
+            next_row = data.iloc[i + 1] if i + 1 < len(data) else row
+            entry_price = float(next_row["Open"]) + signal * (spread_cost / 2.0)
+            
+            open_trade = (ts, entry_price, signal, size, sl_price, tp_price)
 
         # --- equity marcada a mercado a cada candle (p/ drawdown correto) ---
         equity = cash
@@ -159,6 +184,8 @@ def run_backtest(
             "Preço entrada": round(entry_price, 5),
             "Preço saída": round(float(data["Close"].iloc[-1]), 5),
             "Motivo saída": "Fim do histórico",
+            "Regime vol": entry_regime,
+            "Stop mult": round(entry_mult, 2),
             "Tamanho": round(size, 2),
             "PnL": round(pnl, 2),
             "Retorno %": round(pnl / (size * entry_price) * 100, 3),
@@ -197,8 +224,8 @@ def _build_result(trades, equity_curve, initial_capital, spread_pips, pip_size=P
         metrics["Taxa de acerto %"] = round(wins.mean() * 100, 1)
         metrics["Profit factor"] = round(gross_win / gross_loss, 2) if gross_loss > 0 else None
         metrics["Expectativa por trade"] = round(trades_df["PnL"].mean(), 2)
-        metrics["Trade médio vencedor"] = round(trades_df.loc[wins, "PnL"].mean(), 2)
-        metrics["Trade médio perdedor"] = round(trades_df.loc[~wins, "PnL"].mean(), 2)
+        metrics["Trade médio vencedor"] = round(trades_df.loc[wins, "PnL"].mean(), 2) if wins.any() else None
+        metrics["Trade médio perdedor"] = round(trades_df.loc[~wins, "PnL"].mean(), 2) if (~wins).any() else None
         metrics["Melhor trade"] = round(trades_df["PnL"].max(), 2)
         metrics["Pior trade"] = round(trades_df["PnL"].min(), 2)
 
