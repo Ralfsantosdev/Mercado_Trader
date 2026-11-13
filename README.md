@@ -1,5 +1,15 @@
 # Forex Dashboard
 
+## Screenshots
+
+<!-- Copie as imagens para docs/ e descomente os blocos abaixo.
+     Ex.: cp ~/Desktop/dashboard.png docs/
+
+![Dashboard](docs/dashboard.png)
+![Backtest](docs/backtest.png)
+![Otimizador WFO](docs/wfo.png)
+-->
+
 ## Aviso importante antes de operar com dinheiro real
 
 Este dashboard **não garante lucro**. O backtest com custo real (spread) faz
