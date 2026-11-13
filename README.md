@@ -213,8 +213,8 @@ minúsculo num candle quieto e a posição explodiu para **~50× de alavancagem*
 Notifica quando o sinal **muda** (neutro→compra/venda), sem spam a cada refresh.
 
 ```toml
-telegram_token = "123456:AAH..."
-telegram_chat  = "987654321"
+telegram_token = "123nb:AAH..."
+telegram_chat  = "98765"
 ```
 Como criar o bot e descobrir o chat_id: veja o topo de `alerts.py`. Você pode
 rodar `python alerts.py --test` para validar, e o módulo roda sozinho fora do
