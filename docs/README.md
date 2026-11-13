@@ -1,19 +1,19 @@
 # Screenshots
 
-Coloque aqui as imagens do programa (PNG ou JPG, ideal < 1 MB cada) e
-referencie-as no README principal:
+Imagens do programa referenciadas no README principal:
 
 ```markdown
 ![Dashboard](docs/dashboard.png)
 ```
 
-Nomes sugeridos:
-
 | Arquivo | O que mostrar |
 |---|---|
 | `dashboard.png` | painel principal com gráfico |
-| `backtest.png` | aba de backtest com spread |
-| `wfo.png` | aba do otimizador WFO |
+| `consistencia.png` | diário de consistência e métricas |
+| `mt5-smartcloudtrend.png` | indicador SmartCloudTrend no MetaTrader 5 |
+
+Para adicionar uma nova: copie o PNG para esta pasta, referencie no README
+principal com `![legenda](docs/arquivo.png)` e adicione a linha na tabela.
 
 Antes de capturar: não deixe visíveis senha, chaves da API ou chat_id do
 Telegram na sidebar.

@@ -2,13 +2,11 @@
 
 ## Screenshots
 
-<!-- Copie as imagens para docs/ e descomente os blocos abaixo.
-     Ex.: cp ~/Desktop/dashboard.png docs/
-
 ![Dashboard](docs/dashboard.png)
-![Backtest](docs/backtest.png)
-![Otimizador WFO](docs/wfo.png)
--->
+
+![Diário de consistência](docs/consistencia.png)
+
+![Indicador SmartCloudTrend no MetaTrader 5](docs/mt5-smartcloudtrend.png)
 
 ## Aviso importante antes de operar com dinheiro real
 
